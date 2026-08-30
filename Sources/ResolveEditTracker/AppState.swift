@@ -23,14 +23,42 @@ final class AppState: ObservableObject {
     private var activeProject: String?
     private var lastTick = Date()
     private var tickCount = 0
-    private var notInProjectStreak = 0
-    private let stopConfirmations = 3
+    private var lastInProjectAt = Date()      // last reading that showed a live project (editing or busy)
+    private var lastKnownPage = ResolvePage.edit.rawValue
+    private var busySince: Date?              // when Resolve last went "busy" (off-page) while tracking
+    private let maxBusySec: Double = 15 * 60  // stop if Resolve stays off-page this long while tracking
     private var announcedProject: String?
     private var activeWhilePausedSec: Double = 0
     private let manualResumeAfterSec: Double = 20
     private var lastStatsAt = Date.distantPast
 
     private enum StartReason { case fresh, resume, projectSwitch }
+
+    /// What Resolve is doing right now, distilled from a probe reading.
+    private enum Presence {
+        case editing(String)   // on a page, inside a loaded project
+        case busy(String)      // project loaded, Resolve on a dialog / background task
+        case noProject         // Resolve + API up, but no project (Project Manager)
+        case apiDown           // Resolve up, scripting not answering
+        case resolveGone       // Resolve not running
+    }
+
+    private func presence(_ s: ResolveStatus) -> Presence {
+        if !s.running { return .resolveGone }
+        if !s.apiOk { return .apiDown }
+        guard let project = s.project, !project.isEmpty else { return .noProject }
+        return s.page == nil ? .busy(project) : .editing(project)
+    }
+
+    /// How long a non-editing reading must persist before we commit to stopping.
+    private func stopGrace(for p: Presence) -> TimeInterval {
+        switch p {
+        case .resolveGone:    return 4    // pgrep is reliable — no need to wait long
+        case .apiDown:        return 10
+        case .noProject:      return 20   // a dialog that also nulls the project recovers in seconds
+        case .busy, .editing: return .infinity
+        }
+    }
 
     private let settingsURL: URL
 
@@ -105,13 +133,17 @@ final class AppState: ObservableObject {
         status = newStatus
         connection = newConnection
 
-        let inProject = newStatus.inProject
-        if inProject { notInProjectStreak = 0 } else { notInProjectStreak += 1 }
-        let confirmedOut = notInProjectStreak >= stopConfirmations
+        let now = Date()
+        let p = presence(newStatus)
+        switch p {
+        case .editing, .busy:                lastInProjectAt = now
+        case .noProject, .apiDown, .resolveGone: break
+        }
+        let confirmedOut = now.timeIntervalSince(lastInProjectAt) >= stopGrace(for: p)
 
         switch state {
         case .notInProject:
-            if inProject, let project = newStatus.project {
+            if case .editing(let project) = p {
                 if isIdleBeyondLimit() {
                     state = .idlePaused
                     activeProject = project
@@ -123,23 +155,34 @@ final class AppState: ObservableObject {
             }
 
         case .tracking:
-            if !inProject {
+            switch p {
+            case .editing(let project):
+                if project != activeProject {
+                    endSession(autoNote: "(auto-stopped: switched project)")
+                    enterTracking(project: project, reason: .projectSwitch)
+                    Log.write("⇄ switched project → \(project)")
+                }
+            case .busy:
+                break   // Resolve is grinding on a task — keep tracking
+            case .noProject, .apiDown, .resolveGone:
                 if confirmedOut {
-                    endSession(autoNote: stopNote(for: newConnection))
+                    let note = stopNote(for: newConnection)
+                    endSession(autoNote: note)
                     state = .notInProject
                     announcedProject = nil
-                    Log.write("⏹ \(stopNote(for: newConnection))")
+                    Log.write("⏹ \(note)")
                 }
-            } else if let project = newStatus.project, project != activeProject {
-                endSession(autoNote: "(auto-stopped: switched project)")
-                enterTracking(project: project, reason: .projectSwitch)
-                Log.write("⇄ switched project → \(project)")
             }
 
         case .idlePaused, .manuallyPaused:
-            if !inProject, confirmedOut {
-                state = .notInProject
-                announcedProject = nil
+            switch p {
+            case .noProject, .apiDown, .resolveGone:
+                if confirmedOut {
+                    state = .notInProject
+                    announcedProject = nil
+                }
+            case .editing, .busy:
+                break
             }
         }
 
@@ -206,8 +249,15 @@ final class AppState: ObservableObject {
 
         switch state {
         case .tracking:
+            if let pg = status.pageEnum?.rawValue { lastKnownPage = pg }
+            if status.busy {
+                if busySince == nil { busySince = now }
+            } else {
+                busySince = nil
+            }
+
             if dt > 0, dt < 5, var session = current {
-                let page = status.pageEnum?.rawValue ?? ResolvePage.edit.rawValue
+                let page = status.pageEnum?.rawValue ?? lastKnownPage
                 session.pageSeconds[page, default: 0] += dt
                 session.timelineSeconds[status.timeline ?? "—", default: 0] += dt
                 session.durationSec = session.pageSeconds.values.reduce(0, +)
@@ -216,7 +266,13 @@ final class AppState: ObservableObject {
             }
             elapsed = current?.durationSec ?? 0
 
-            if idle >= idleLimit {
+            if let since = busySince, now.timeIntervalSince(since) > maxBusySec {
+                endSession(autoNote: "(auto-stopped: Resolve inactive)")
+                state = .idlePaused
+                elapsed = 0
+                busySince = nil
+                Log.write("⏸ paused — Resolve off-page for \(Int(maxBusySec / 60))m")
+            } else if idle >= idleLimit {
                 endSession(autoNote: "(auto-stopped: idle)")
                 state = .idlePaused
                 elapsed = 0
@@ -224,14 +280,14 @@ final class AppState: ObservableObject {
             }
 
         case .idlePaused:
-            if idle < 2, status.inProject, let project = status.project {
+            if idle < 2, status.hasProject, let project = status.project {
                 enterTracking(project: project,
                               reason: announcedProject == project ? .resume : .fresh)
             }
 
         case .manuallyPaused:
             elapsed = 0
-            if status.inProject, idle < 3, dt > 0, dt < 5 {
+            if status.hasProject, idle < 3, dt > 0, dt < 5 {
                 activeWhilePausedSec += dt
                 if activeWhilePausedSec >= manualResumeAfterSec, let project = status.project {
                     Log.write("▶︎ auto-resume from manual pause (kept working)")
@@ -256,6 +312,7 @@ final class AppState: ObservableObject {
 
     private func beginSession(project: String) {
         activeProject = project
+        busySince = nil
         let now = Date()
         current = Session(
             project: project,
@@ -296,7 +353,7 @@ final class AppState: ObservableObject {
             activeWhilePausedSec = 0
             Log.write("⏸ manual pause")
         case .manuallyPaused, .idlePaused:
-            if status.inProject, let project = status.project {
+            if status.hasProject, let project = status.project {
                 enterTracking(project: project,
                               reason: announcedProject == project ? .resume : .fresh)
             }
@@ -409,6 +466,10 @@ final class AppState: ObservableObject {
         switch state {
         case .tracking:
             if status.rendering { return "Tracking · Rendering" }
+            if status.busy {
+                let last = ResolvePage(rawValue: lastKnownPage)?.displayName ?? "Working"
+                return "Tracking · \(last)"
+            }
             return "Tracking · \(status.pageEnum?.displayName ?? status.page ?? "—")"
         case .idlePaused:     return "Paused (idle)"
         case .manuallyPaused: return "Paused"

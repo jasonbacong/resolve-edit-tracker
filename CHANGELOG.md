@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.1
+
+- Fix: the timer no longer stops and restarts when Resolve puts up a progress dialog
+  (transcribe subtitles, sync audio, cache, analyze, project load). Those briefly make
+  the scripting API return no page; the tracker now treats "project loaded but Resolve
+  is busy" as a distinct state and keeps tracking, attributing the time to the last
+  known page. A session is only auto-stopped when Resolve quits, the scripting
+  connection drops, the project is genuinely closed for 20 s+, or desk-idle triggers.
+- Probe bridges short gaps where Resolve reports neither a page nor a project name, and
+  no longer rebuilds its connection on every transient API exception.
+- Safety net: if Resolve stays off-page for 15 minutes while tracking, the session is
+  paused (auto-resumes on activity).
+
 ## v1.0.0
 
 First public release.

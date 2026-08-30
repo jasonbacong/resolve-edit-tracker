@@ -146,7 +146,7 @@ struct MenuContentView: View {
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .disabled(app.state == .notInProject && !app.status.inProject)
+            .disabled(app.state == .notInProject && !app.status.hasProject)
 
             HStack(spacing: 6) {
                 Button { openHistory() } label: {

@@ -29,6 +29,9 @@ struct ResolveStatus: Codable, Equatable {
     var project: String? = nil
     var timeline: String? = nil
     var rendering: Bool = false
+    var busy: Bool = false              // API is up + a project is loaded, but Resolve isn't on a
+                                        // standard page — a dialog / background task (transcribe,
+                                        // sync, cache, load) is up. Not a reason to stop tracking.
     var transientError: String? = nil
 
     init() {}
@@ -42,11 +45,16 @@ struct ResolveStatus: Codable, Equatable {
         project        = try c.decodeIfPresent(String.self, forKey: .project)
         timeline       = try c.decodeIfPresent(String.self, forKey: .timeline)
         rendering      = try c.decodeIfPresent(Bool.self,   forKey: .rendering) ?? false
+        busy           = try c.decodeIfPresent(Bool.self,   forKey: .busy) ?? false
         transientError = try c.decodeIfPresent(String.self, forKey: .transientError)
     }
 
-    /// True when a project is actually loaded in the workspace (not the Project Manager).
+    /// True when Resolve is on a page inside a loaded project (actively editable).
     var inProject: Bool { running && apiOk && page != nil && (project?.isEmpty == false) }
+
+    /// True when a project is loaded, even if Resolve is momentarily showing a dialog
+    /// or grinding on a background task. This is the signal for "the user is in a project".
+    var hasProject: Bool { running && apiOk && (project?.isEmpty == false) }
 
     var pageEnum: ResolvePage? { page.flatMap { ResolvePage(rawValue: $0) } }
 

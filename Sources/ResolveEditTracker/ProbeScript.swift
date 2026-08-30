@@ -50,6 +50,12 @@ def emit(obj):
     except Exception:
         os._exit(0)
 
+def norm(v):
+    if v is None:
+        return None
+    v = str(v).strip()
+    return v or None
+
 def setup_env():
     api = first_existing(API_CANDIDATES)
     lib = first_existing(LIB_CANDIDATES)
@@ -68,14 +74,24 @@ def setup_env():
     except Exception as e:
         return None, "scripting module not importable (%s)" % (str(e)[:120])
 
+# Seconds to keep reporting the last-seen project after Resolve stops naming one,
+# to bridge dialogs / background tasks that briefly null out page AND project.
+STALE_PROJECT_WINDOW = 20.0
+
 def main():
     dvr = None
     resolve = None
     import_reason = None
+    api_strikes = 0
+    transient_strikes = 0
+    last_project = None
+    last_timeline = None
+    last_project_at = 0.0
 
     while True:
         if not resolve_running():
             resolve = None
+            last_project = None
             emit({"running": False})
             time.sleep(POLL)
             continue
@@ -92,26 +108,53 @@ def main():
             if resolve is None:
                 resolve = dvr.scriptapp("Resolve")
             if resolve is None:
-                emit({"running": True, "apiOk": False,
-                      "reason": "scripting not responding (check Preferences → System → General → External scripting)"})
+                api_strikes += 1
+                if api_strikes >= 3:
+                    emit({"running": True, "apiOk": False,
+                          "reason": "scripting not responding (check Preferences → System → General → External scripting)"})
                 time.sleep(POLL)
                 continue
+            api_strikes = 0
 
-            page = resolve.GetCurrentPage()
+            page = norm(resolve.GetCurrentPage())
             pm = resolve.GetProjectManager()
             proj = pm.GetCurrentProject() if pm else None
-            name = proj.GetName() if proj else None
-            tl = proj.GetCurrentTimeline() if proj else None
-            tlname = tl.GetName() if tl else None
+            name = norm(proj.GetName()) if proj else None
+            tlname = None
             rendering = False
-            try:
-                rendering = bool(proj.IsRenderingInProgress()) if proj else False
-            except Exception:
-                rendering = False
+            if proj is not None:
+                try:
+                    tl = proj.GetCurrentTimeline()
+                    tlname = norm(tl.GetName()) if tl else None
+                except Exception:
+                    tlname = None
+                try:
+                    rendering = bool(proj.IsRenderingInProgress())
+                except Exception:
+                    rendering = False
+
+            now = time.time()
+            if name:
+                last_project = name
+                last_timeline = tlname or last_timeline
+                last_project_at = now
+
+            busy = page is None
+            # A dialog / background task can null out page (and sometimes the project
+            # name too) for a few seconds. Keep reporting the project we just saw so the
+            # app doesn't mistake it for the project being closed.
+            if busy and not name and last_project and (now - last_project_at) <= STALE_PROJECT_WINDOW:
+                name = last_project
+                tlname = tlname or last_timeline
+
             emit({"running": True, "apiOk": True, "page": page,
-                  "project": name, "timeline": tlname, "rendering": rendering})
+                  "project": name, "timeline": tlname,
+                  "rendering": rendering, "busy": busy})
+            transient_strikes = 0
         except Exception as e:
-            resolve = None
+            transient_strikes += 1
+            if transient_strikes >= 3:
+                resolve = None   # only rebuild the handle after repeated failures
             emit({"running": True, "apiOk": True, "transientError": str(e)[:200]})
         time.sleep(POLL)
 
