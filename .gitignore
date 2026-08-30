@@ -1,0 +1,19 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output
+dist/
+
+# macOS
+.DS_Store
+*.swp
+
+# Xcode (if anyone opens the package in Xcode)
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+
+# Local scratch
+*.local

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Assemble .app bundle
+        run: ./make_app.sh
+
+      - name: Sanity-check the bundle
+        run: |
+          test -x "dist/Resolve Edit Tracker.app/Contents/MacOS/ResolveEditTracker"
+          /usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "dist/Resolve Edit Tracker.app/Contents/Info.plist"
+          codesign --verify --verbose "dist/Resolve Edit Tracker.app"
