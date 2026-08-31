@@ -5,7 +5,7 @@ import Foundation
 /// Written to a temp file at launch and run with `python3`. Emits one JSON object
 /// per line on stdout, roughly every 2 seconds:
 ///
-///     {"running": true, "apiOk": true, "page": "edit", "project": "X", "timeline": "V1", "rendering": false}
+///     {"running": true, "apiOk": true, "page": "edit", "project": "X", "timeline": "V1", "timecode": "01:00:12:04", "rendering": false}
 ///     {"running": true, "apiOk": true, "page": null, "project": null}          // Project Manager
 ///     {"running": true, "apiOk": false, "reason": "scripting not responding"}  // Resolve up, API silent
 ///     {"running": false}                                                       // Resolve not running
@@ -121,11 +121,22 @@ def main():
             proj = pm.GetCurrentProject() if pm else None
             name = norm(proj.GetName()) if proj else None
             tlname = None
+            tc = None
+            tlcount = 0
             rendering = False
             if proj is not None:
                 try:
+                    tlcount = int(proj.GetTimelineCount() or 0)
+                except Exception:
+                    tlcount = 0
+                try:
                     tl = proj.GetCurrentTimeline()
-                    tlname = norm(tl.GetName()) if tl else None
+                    if tl:
+                        tlname = norm(tl.GetName())
+                        try:
+                            tc = norm(tl.GetCurrentTimecode())
+                        except Exception:
+                            tc = None
                 except Exception:
                     tlname = None
                 try:
@@ -134,21 +145,25 @@ def main():
                     rendering = False
 
             now = time.time()
-            if name:
+            busy = page is None
+
+            # While loading a project or running a modal task (transcribe, sync, cache),
+            # Resolve briefly swaps in its empty default project — same "Untitled Project"
+            # name but zero timelines — or nulls the project entirely. Those aren't real
+            # switches: a project you can actually edit in has at least one timeline.
+            real = bool(name) and tlcount > 0
+            if real:
                 last_project = name
                 last_timeline = tlname or last_timeline
                 last_project_at = now
-
-            busy = page is None
-            # A dialog / background task can null out page (and sometimes the project
-            # name too) for a few seconds. Keep reporting the project we just saw so the
-            # app doesn't mistake it for the project being closed.
-            if busy and not name and last_project and (now - last_project_at) <= STALE_PROJECT_WINDOW:
+            elif last_project and (now - last_project_at) <= STALE_PROJECT_WINDOW:
                 name = last_project
                 tlname = tlname or last_timeline
+            else:
+                name = None
 
             emit({"running": True, "apiOk": True, "page": page,
-                  "project": name, "timeline": tlname,
+                  "project": name, "timeline": tlname, "timecode": tc,
                   "rendering": rendering, "busy": busy})
             transient_strikes = 0
         except Exception as e:

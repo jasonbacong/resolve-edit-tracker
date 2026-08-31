@@ -22,9 +22,14 @@ launches at login, detects when you enter a project, and tracks in the backgroun
 - **Auto-start / auto-stop.** Open a project → a toast slides down with a soft ping and
   tracking begins. Close the project, switch projects, quit Resolve, or put the Mac to
   sleep → the session is saved.
-- **Desk-idle pause.** After N minutes with no keyboard/mouse input anywhere (default 1),
-  the session stops and saves; it resumes on input. A manual pause auto-resumes if you
-  keep working without hitting Resume.
+- **Focus-aware.** By default the timer only runs while Resolve is the active app —
+  switch to your browser and it freezes; come back and it resumes. Playback and jog
+  (including from a Speed Editor) count as activity. Turn it off to track whenever a
+  project is open.
+- **Desk-idle pause.** After N minutes with no keyboard/mouse input (default 3), the
+  session stops and saves; it resumes on input. A manual pause auto-resumes if you keep
+  working without hitting Resume. Reviewing playback and Resolve's own progress dialogs
+  don't count as idle.
 - **Render-aware.** Optionally keeps tracking while Resolve is rendering instead of
   idle-pausing.
 - **Per-page & per-timeline breakdown** — see where the hours actually went (Edit, Fusion,
@@ -75,11 +80,13 @@ Needs Xcode 16+ (Swift 6 toolchain). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 A small Python probe (embedded in the app, written to a temp file at launch) connects to
 Resolve's scripting API and prints the current page, project, timeline and render state
-every ~2 s. The Swift app reads that stream, runs the start/stop/idle state machine,
-attributes each second to the current page and timeline, and persists sessions. A
-watchdog restarts the probe if it hangs or dies. Idle time comes from Quartz Event
-Services — **no Accessibility or Input-Monitoring permission required**. Notifications use
-a custom panel, not Notification Center, so there's no permission prompt for that either.
+every ~2 s (page, project, timeline, playhead timecode, render state). The Swift app
+reads that stream, runs the start/stop/idle state machine, attributes each second to the
+current page and timeline, and persists sessions. A watchdog restarts the probe if it
+hangs or dies. Idle time comes from Quartz Event Services and the active app from
+`NSWorkspace` — **no Accessibility or Input-Monitoring permission required**.
+Notifications use a custom panel, not Notification Center, so there's no permission
+prompt for that either.
 
 ### Where your data lives
 

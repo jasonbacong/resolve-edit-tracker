@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.1.0
+
+- **Focus-aware tracking** (new, on by default — Settings → Tracking). The timer only
+  runs while DaVinci Resolve is the active app. Switch to another app and it freezes;
+  stay away longer than ~90 seconds and the session is saved. Click back into Resolve
+  and it picks up where it left off. Turn the setting off for the old behaviour
+  (track whenever a project is open, regardless of what's in front).
+- **Playback and jog count as activity.** A moving playhead — whether from JKL, the
+  spacebar, or a hardware panel like the Speed Editor that doesn't register as
+  keyboard/mouse — no longer counts as idle. Reviewing a long cut won't pause tracking.
+- **Resolve's own progress dialogs no longer trip the idle timer.** Transcribe
+  subtitles, sync audio, cache, analyze — you're waiting on Resolve, not idle.
+- **Project-switch flicker fixed.** Resolve briefly swaps in an empty "Untitled Project"
+  while loading a project or running a modal task; the tracker was recording those as
+  15-second sessions and false switches. It now ignores any project with no timelines,
+  and a real switch has to hold for a few seconds before it's acted on.
+- Idle-stop default raised from 1 to 3 minutes for new installs. Existing settings are
+  unchanged.
+- Backstop: playback or a modal task can't defer an idle-stop for more than 30 minutes.
+
 ## v1.0.1
 
 - Fix: the timer no longer stops and restarts when Resolve puts up a progress dialog

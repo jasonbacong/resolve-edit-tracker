@@ -32,6 +32,27 @@ final class AppState: ObservableObject {
     private let manualResumeAfterSec: Double = 20
     private var lastStatsAt = Date.distantPast
 
+    // Project-name debounce — Resolve flashes a default "Untitled Project" name while
+    // loading a project or running a modal task; don't treat those as real switches.
+    private var pendingProject: String?
+    private var pendingProjectSince = Date.distantPast
+    private let startGrace: TimeInterval = 4
+    private let switchGrace: TimeInterval = 6
+
+    // Frontmost-app gating
+    private var awaySince: Date?              // when Resolve stopped being frontmost while tracking
+    private let awayGraceSec: Double = 90     // freeze this long before saving the session
+    private var lastResolveFrontmost = true
+
+    // Playback detection — a moving playhead means the user is reviewing, not idle.
+    private var lastTimecode: String?
+    private var timecodeMovedAt = Date.distantPast
+    private var zeroInputSince: Date?        // ~when keyboard/mouse input last stopped
+    private let hardIdleSec: Double = 30 * 60 // playback / busy can't defer a stop past this
+
+    private enum IdlePauseReason { case idle, away }
+    private var idlePauseReason: IdlePauseReason = .idle
+
     private enum StartReason { case fresh, resume, projectSwitch }
 
     /// What Resolve is doing right now, distilled from a probe reading.
@@ -132,6 +153,7 @@ final class AppState: ObservableObject {
     private func handle(_ newStatus: ResolveStatus, _ newConnection: ConnectionState) {
         status = newStatus
         connection = newConnection
+        noteTimecode(newStatus.timecode)
 
         let now = Date()
         let p = presence(newStatus)
@@ -143,33 +165,50 @@ final class AppState: ObservableObject {
 
         switch state {
         case .notInProject:
-            if case .editing(let project) = p {
-                if isIdleBeyondLimit() {
-                    state = .idlePaused
-                    activeProject = project
-                    announcedProject = nil
-                    Log.write("• project open but idle — waiting for input (\(project))")
-                } else {
-                    enterTracking(project: project, reason: .fresh)
-                }
+            guard case .editing(let project) = p else { pendingProject = nil; break }
+            // Require the name to hold briefly before starting — filters the default
+            // "Untitled Project" name Resolve flashes during load / modal tasks.
+            if pendingProject != project {
+                pendingProject = project
+                pendingProjectSince = now
+                break
+            }
+            guard now.timeIntervalSince(pendingProjectSince) >= startGrace else { break }
+            pendingProject = nil
+
+            let gatedOut = settings.trackOnlyWhenFrontmost && !isResolveFrontmost()
+            if isIdleBeyondLimit() || gatedOut {
+                state = .idlePaused
+                idlePauseReason = gatedOut ? .away : .idle
+                activeProject = project
+                announcedProject = nil
+                Log.write("• project open, waiting — \(gatedOut ? "not in Resolve" : "idle") (\(project))")
+            } else {
+                enterTracking(project: project, reason: .fresh)
             }
 
         case .tracking:
             switch p {
             case .editing(let project):
-                if project != activeProject {
+                if project == activeProject {
+                    pendingProject = nil
+                } else if pendingProject != project {
+                    pendingProject = project
+                    pendingProjectSince = now
+                } else if now.timeIntervalSince(pendingProjectSince) >= switchGrace {
                     endSession(autoNote: "(auto-stopped: switched project)")
                     enterTracking(project: project, reason: .projectSwitch)
                     Log.write("⇄ switched project → \(project)")
                 }
             case .busy:
-                break   // Resolve is grinding on a task — keep tracking
+                pendingProject = nil   // a modal task never accompanies a real switch
             case .noProject, .apiDown, .resolveGone:
                 if confirmedOut {
                     let note = stopNote(for: newConnection)
                     endSession(autoNote: note)
                     state = .notInProject
                     announcedProject = nil
+                    pendingProject = nil
                     Log.write("⏹ \(note)")
                 }
             }
@@ -180,6 +219,7 @@ final class AppState: ObservableObject {
                 if confirmedOut {
                     state = .notInProject
                     announcedProject = nil
+                    pendingProject = nil
                 }
             case .editing, .busy:
                 break
@@ -202,6 +242,37 @@ final class AppState: ObservableObject {
         guard settings.idleMinutes > 0 else { return false }
         if settings.pauseDuringRenders && status.rendering { return false }
         return IdleMonitor.idleSeconds() >= Double(settings.idleMinutes) * 60
+    }
+
+    /// Records when the timeline playhead last moved, so playback can defeat the idle timer.
+    private func noteTimecode(_ tc: String?) {
+        guard let tc, !tc.isEmpty, tc != lastTimecode else { return }
+        lastTimecode = tc
+        timecodeMovedAt = Date()
+    }
+
+    /// True while the playhead is moving — playback, scrubbing, or jogging from a
+    /// hardware panel (Speed Editor etc.) that doesn't register as keyboard/mouse.
+    /// Used to defeat the idle timer, not to decide whether the user is "in Resolve".
+    private var isPlayingBack: Bool {
+        Date().timeIntervalSince(timecodeMovedAt) < 5
+    }
+
+    /// True when DaVinci Resolve is the frontmost app. Our own popover / Settings
+    /// window doesn't count as leaving Resolve.
+    private func isResolveFrontmost() -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return lastResolveFrontmost }
+        if let mine = Bundle.main.bundleIdentifier, app.bundleIdentifier == mine {
+            return lastResolveFrontmost
+        }
+        let match = app.bundleIdentifier == "com.blackmagic-design.DaVinciResolve"
+        lastResolveFrontmost = match
+        return match
+    }
+
+    /// Whether the frontmost-app requirement (if enabled) is currently met.
+    private var trackingGateOpen: Bool {
+        !settings.trackOnlyWhenFrontmost || isResolveFrontmost()
     }
 
     private func enterTracking(project: String, reason: StartReason) {
@@ -242,14 +313,29 @@ final class AppState: ObservableObject {
         lastTick = now
 
         let idle = IdleMonitor.idleSeconds()
-        let renderHold = settings.pauseDuringRenders && status.rendering
-        let idleLimit: Double = settings.idleMinutes > 0 && !renderHold
-            ? Double(settings.idleMinutes) * 60
-            : .greatestFiniteMagnitude
 
         switch state {
         case .tracking:
             if let pg = status.pageEnum?.rawValue { lastKnownPage = pg }
+
+            // Freeze — don't accrue or stop — while the user is working in another app.
+            // Save the session if they stay away past the grace window.
+            if settings.trackOnlyWhenFrontmost && !isResolveFrontmost() {
+                busySince = nil
+                if awaySince == nil { awaySince = now }
+                elapsed = current?.durationSec ?? 0
+                if now.timeIntervalSince(awaySince!) >= awayGraceSec {
+                    endSession(autoNote: "(auto-stopped: switched away from Resolve)")
+                    state = .idlePaused
+                    idlePauseReason = .away
+                    elapsed = 0
+                    awaySince = nil
+                    Log.write("⏸ away from Resolve")
+                }
+                break
+            }
+            awaySince = nil
+
             if status.busy {
                 if busySince == nil { busySince = now }
             } else {
@@ -266,28 +352,44 @@ final class AppState: ObservableObject {
             }
             elapsed = current?.durationSec ?? 0
 
+            if idle < 5 {
+                zeroInputSince = nil
+            } else if zeroInputSince == nil {
+                zeroInputSince = now.addingTimeInterval(-idle)
+            }
+
+            // Renders (if opted in) fully exempt from idle. Resolve's modal tasks and
+            // playback review also defer an idle-stop — but only up to a hard ceiling,
+            // so a looping playback left running can't bill forever.
+            let renderHold = settings.pauseDuringRenders && status.rendering
+            let softHold = status.busy || isPlayingBack
+            let hardIdle = (zeroInputSince.map { now.timeIntervalSince($0) } ?? 0) >= hardIdleSec
+
             if let since = busySince, now.timeIntervalSince(since) > maxBusySec {
                 endSession(autoNote: "(auto-stopped: Resolve inactive)")
                 state = .idlePaused
+                idlePauseReason = .idle
                 elapsed = 0
                 busySince = nil
                 Log.write("⏸ paused — Resolve off-page for \(Int(maxBusySec / 60))m")
-            } else if idle >= idleLimit {
+            } else if settings.idleMinutes > 0, !renderHold,
+                      idle >= Double(settings.idleMinutes) * 60, !softHold || hardIdle {
                 endSession(autoNote: "(auto-stopped: idle)")
                 state = .idlePaused
+                idlePauseReason = .idle
                 elapsed = 0
                 Log.write("⏸ idle pause (idle \(Int(idle))s)")
             }
 
         case .idlePaused:
-            if idle < 2, status.hasProject, let project = status.project {
+            if idle < 2, trackingGateOpen, status.hasProject, let project = status.project {
                 enterTracking(project: project,
                               reason: announcedProject == project ? .resume : .fresh)
             }
 
         case .manuallyPaused:
             elapsed = 0
-            if status.hasProject, idle < 3, dt > 0, dt < 5 {
+            if status.hasProject, idle < 3, dt > 0, dt < 5, trackingGateOpen {
                 activeWhilePausedSec += dt
                 if activeWhilePausedSec >= manualResumeAfterSec, let project = status.project {
                     Log.write("▶︎ auto-resume from manual pause (kept working)")
@@ -313,6 +415,9 @@ final class AppState: ObservableObject {
     private func beginSession(project: String) {
         activeProject = project
         busySince = nil
+        awaySince = nil
+        pendingProject = nil
+        zeroInputSince = nil
         let now = Date()
         current = Session(
             project: project,
@@ -471,7 +576,7 @@ final class AppState: ObservableObject {
                 return "Tracking · \(last)"
             }
             return "Tracking · \(status.pageEnum?.displayName ?? status.page ?? "—")"
-        case .idlePaused:     return "Paused (idle)"
+        case .idlePaused:     return idlePauseReason == .away ? "Paused · switch to Resolve" : "Paused (idle)"
         case .manuallyPaused: return "Paused"
         case .notInProject:
             switch connection {

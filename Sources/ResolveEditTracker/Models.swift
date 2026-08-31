@@ -28,6 +28,8 @@ struct ResolveStatus: Codable, Equatable {
     var page: String? = nil
     var project: String? = nil
     var timeline: String? = nil
+    var timecode: String? = nil         // timeline playhead position; changes between
+                                        // polls => the user is playing back / scrubbing.
     var rendering: Bool = false
     var busy: Bool = false              // API is up + a project is loaded, but Resolve isn't on a
                                         // standard page — a dialog / background task (transcribe,
@@ -44,6 +46,7 @@ struct ResolveStatus: Codable, Equatable {
         page           = try c.decodeIfPresent(String.self, forKey: .page)
         project        = try c.decodeIfPresent(String.self, forKey: .project)
         timeline       = try c.decodeIfPresent(String.self, forKey: .timeline)
+        timecode       = try c.decodeIfPresent(String.self, forKey: .timecode)
         rendering      = try c.decodeIfPresent(Bool.self,   forKey: .rendering) ?? false
         busy           = try c.decodeIfPresent(Bool.self,   forKey: .busy) ?? false
         transientError = try c.decodeIfPresent(String.self, forKey: .transientError)
@@ -135,8 +138,9 @@ struct Settings: Codable, Equatable {
     var rate: Double = 25.0                       // default / fallback rate
     var currency: String = "€"
     var projectRates: [String: Double] = [:]      // per-project overrides
-    var idleMinutes: Int = 1                      // 0 = off
+    var idleMinutes: Int = 3                      // 0 = off
     var pauseDuringRenders: Bool = true           // don't idle-pause while Resolve is rendering
+    var trackOnlyWhenFrontmost: Bool = true       // only accrue time while Resolve is the active app
     var playSoundOnStart: Bool = true
     var toastOnIdleResume: Bool = false
     var soundName: String = "Glass"
@@ -154,6 +158,7 @@ struct Settings: Codable, Equatable {
         projectRates      = try c.decodeIfPresent([String: Double].self, forKey: .projectRates) ?? d.projectRates
         idleMinutes       = try c.decodeIfPresent(Int.self, forKey: .idleMinutes) ?? d.idleMinutes
         pauseDuringRenders = try c.decodeIfPresent(Bool.self, forKey: .pauseDuringRenders) ?? d.pauseDuringRenders
+        trackOnlyWhenFrontmost = try c.decodeIfPresent(Bool.self, forKey: .trackOnlyWhenFrontmost) ?? d.trackOnlyWhenFrontmost
         playSoundOnStart  = try c.decodeIfPresent(Bool.self, forKey: .playSoundOnStart) ?? d.playSoundOnStart
         toastOnIdleResume = try c.decodeIfPresent(Bool.self, forKey: .toastOnIdleResume) ?? d.toastOnIdleResume
         soundName         = try c.decodeIfPresent(String.self, forKey: .soundName) ?? d.soundName

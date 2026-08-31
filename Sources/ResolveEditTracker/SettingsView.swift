@@ -57,6 +57,11 @@ struct SettingsView: View {
             }
 
             Section("Tracking") {
+                Toggle("Only track while DaVinci Resolve is the active app",
+                       isOn: $app.settings.trackOnlyWhenFrontmost)
+                Text("Switch to another app and the timer freezes; if you stay away for more than a minute the session is saved. Playback inside Resolve still counts as working. Turn this off to track whenever a project is open, regardless of what's in front.")
+                    .font(.caption).foregroundStyle(.secondary)
+
                 LabeledContent("Idle stop") {
                     HStack(spacing: 6) {
                         TextField("Minutes", value: $app.settings.idleMinutes, format: .number)
@@ -67,7 +72,7 @@ struct SettingsView: View {
                         Text("minutes").foregroundStyle(.secondary)
                     }
                 }
-                Text("Pause after this many minutes with no keyboard or mouse activity anywhere. 0 disables it.")
+                Text("Pause after this many minutes with no keyboard or mouse activity. Reviewing playback and Resolve's own progress dialogs don't count as idle. 0 disables it.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Keep tracking while Resolve is rendering", isOn: $app.settings.pauseDuringRenders)
             }
