@@ -124,6 +124,11 @@ final class AppState: ObservableObject {
         rebuildStats(force: true)
 
         settings.launchAtLogin = LoginItem.isEnabled
+        // Ad-hoc signed updates can lose Accessibility access; ask again rather than
+        // silently recording Premiere without its project and sequence names.
+        if settings.trackDocumentDetail && !AXIsProcessTrusted() {
+            requestAccessibility()
+        }
 
         monitor = ResolveMonitor { [weak self] status, connection in
             MainActor.assumeIsolated { self?.handle(status, connection) }
