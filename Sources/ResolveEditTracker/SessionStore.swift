@@ -26,9 +26,7 @@ final class SessionStore {
     private(set) var sessions: [Session] = []
 
     init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        directory = base.appendingPathComponent("ResolveEditTracker", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        directory = DataLocation.directory
         sessionsURL = directory.appendingPathComponent("sessions.json")
         currentURL = directory.appendingPathComponent("current.json")
 

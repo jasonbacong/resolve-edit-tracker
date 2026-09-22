@@ -2,12 +2,7 @@ import Foundation
 
 /// Lightweight append-only log at ~/Library/Application Support/ResolveEditTracker/debug.log
 enum Log {
-    private static let url: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("ResolveEditTracker", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("debug.log")
-    }()
+    private static let url: URL = DataLocation.directory.appendingPathComponent("debug.log")
 
     private static let df: DateFormatter = {
         let d = DateFormatter()

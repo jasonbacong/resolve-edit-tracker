@@ -95,24 +95,25 @@ enum ConnectionState: Equatable {
 /// Custom decoder so older `sessions.json` files (missing newer fields) still load.
 struct Session: Codable, Identifiable {
     var id: UUID = UUID()
-    var project: String
+    var app: EditorApp = .resolve   // which editor this time was spent in
+    var project: String             // document: Resolve project, .prproj, .aep, …
     var start: Date
     var end: Date
     var durationSec: Double
     var rate: Double
     var currency: String
     var note: String
-    var pageSeconds: [String: Double] = [:]
-    var timelineSeconds: [String: Double] = [:]
+    var pageSeconds: [String: Double] = [:]      // Resolve pages; one bucket for other apps
+    var timelineSeconds: [String: Double] = [:]  // timelines / sequences / compositions
     var manual: Bool = false
 
     var earnings: Double { durationSec / 3600.0 * rate }
 
-    init(id: UUID = UUID(), project: String, start: Date, end: Date, durationSec: Double,
-         rate: Double, currency: String, note: String,
+    init(id: UUID = UUID(), app: EditorApp = .resolve, project: String, start: Date, end: Date,
+         durationSec: Double, rate: Double, currency: String, note: String,
          pageSeconds: [String: Double] = [:], timelineSeconds: [String: Double] = [:],
          manual: Bool = false) {
-        self.id = id; self.project = project; self.start = start; self.end = end
+        self.id = id; self.app = app; self.project = project; self.start = start; self.end = end
         self.durationSec = durationSec; self.rate = rate; self.currency = currency
         self.note = note; self.pageSeconds = pageSeconds
         self.timelineSeconds = timelineSeconds; self.manual = manual
@@ -121,6 +122,8 @@ struct Session: Codable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id              = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        // Sessions recorded before multi-app support were all Resolve.
+        app             = try c.decodeIfPresent(EditorApp.self, forKey: .app) ?? .resolve
         project         = try c.decodeIfPresent(String.self, forKey: .project) ?? "Untitled"
         start           = try c.decode(Date.self, forKey: .start)
         end             = try c.decodeIfPresent(Date.self, forKey: .end) ?? start
@@ -141,6 +144,8 @@ struct Settings: Codable, Equatable {
     var idleMinutes: Int = 3                      // 0 = off
     var pauseDuringRenders: Bool = true           // don't idle-pause while Resolve is rendering
     var trackOnlyWhenFrontmost: Bool = true       // only accrue time while Resolve is the active app
+    var enabledEditors: Set<EditorApp> = Set(EditorApp.allCases)
+    var trackDocumentDetail: Bool = false         // read project/sequence names from Adobe apps
     var playSoundOnStart: Bool = true
     var toastOnIdleResume: Bool = false
     var soundName: String = "Glass"
@@ -159,6 +164,8 @@ struct Settings: Codable, Equatable {
         idleMinutes       = try c.decodeIfPresent(Int.self, forKey: .idleMinutes) ?? d.idleMinutes
         pauseDuringRenders = try c.decodeIfPresent(Bool.self, forKey: .pauseDuringRenders) ?? d.pauseDuringRenders
         trackOnlyWhenFrontmost = try c.decodeIfPresent(Bool.self, forKey: .trackOnlyWhenFrontmost) ?? d.trackOnlyWhenFrontmost
+        enabledEditors    = try c.decodeIfPresent(Set<EditorApp>.self, forKey: .enabledEditors) ?? d.enabledEditors
+        trackDocumentDetail = try c.decodeIfPresent(Bool.self, forKey: .trackDocumentDetail) ?? d.trackDocumentDetail
         playSoundOnStart  = try c.decodeIfPresent(Bool.self, forKey: .playSoundOnStart) ?? d.playSoundOnStart
         toastOnIdleResume = try c.decodeIfPresent(Bool.self, forKey: .toastOnIdleResume) ?? d.toastOnIdleResume
         soundName         = try c.decodeIfPresent(String.self, forKey: .soundName) ?? d.soundName

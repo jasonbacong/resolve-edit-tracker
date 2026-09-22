@@ -40,9 +40,14 @@ final class AppState: ObservableObject {
     private let switchGrace: TimeInterval = 6
 
     // Frontmost-app gating
-    private var awaySince: Date?              // when Resolve stopped being frontmost while tracking
+    private var awaySince: Date?              // when the editor stopped being frontmost while tracking
     private let awayGraceSec: Double = 90     // freeze this long before saving the session
-    private var lastResolveFrontmost = true
+    private var lastFrontmostEditor: EditorApp? = .resolve
+
+    // Non-Resolve editors (Premiere, After Effects, Photoshop, Lightroom). These have no
+    // scripting API worth the name, so being frontmost is the only signal we get.
+    private let detailProbe = EditorDetailProbe()
+    private var activeUnit: String?           // current sequence / composition
 
     // Playback detection — a moving playhead means the user is reviewing, not idle.
     private var lastTimecode: String?
@@ -258,17 +263,25 @@ final class AppState: ObservableObject {
         Date().timeIntervalSince(timecodeMovedAt) < 5
     }
 
-    /// True when DaVinci Resolve is the frontmost app. Our own popover / Settings
-    /// window doesn't count as leaving Resolve.
-    private func isResolveFrontmost() -> Bool {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return lastResolveFrontmost }
-        if let mine = Bundle.main.bundleIdentifier, app.bundleIdentifier == mine {
-            return lastResolveFrontmost
+    /// Which tracked editor is frontmost right now, if any. Our own popover / Settings
+    /// window doesn't count as leaving the editor you were in.
+    private func frontmostEditor() -> EditorApp? {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return lastFrontmostEditor }
+        if let mine = Bundle.main.bundleIdentifier, front.bundleIdentifier == mine {
+            return lastFrontmostEditor
         }
-        let match = app.bundleIdentifier == "com.blackmagic-design.DaVinciResolve"
-        lastResolveFrontmost = match
+        let match = EditorApp.matching(bundleID: front.bundleIdentifier)
+        lastFrontmostEditor = match
         return match
     }
+
+    /// The frontmost editor, but only if the user has it switched on.
+    private func frontmostEnabledEditor() -> EditorApp? {
+        guard let app = frontmostEditor(), settings.enabledEditors.contains(app) else { return nil }
+        return app
+    }
+
+    private func isResolveFrontmost() -> Bool { frontmostEditor() == .resolve }
 
     /// Whether the frontmost-app requirement (if enabled) is currently met.
     private var trackingGateOpen: Bool {
