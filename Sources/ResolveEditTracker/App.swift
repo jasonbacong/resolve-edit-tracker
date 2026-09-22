@@ -69,17 +69,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func refreshStatusButton() {
         guard let button = statusItem.button, let appState else { return }
-        let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        let image = NSImage(systemSymbolName: appState.menuBarSymbol, accessibilityDescription: "Resolve Edit Tracker")?
-            .withSymbolConfiguration(cfg)
-        image?.isTemplate = true
-        button.image = image
+        // While tracking, show the editor's own icon so an app switch is visible at a
+        // glance; otherwise the monochrome state symbol.
+        if let editor = appState.menuBarEditor, let icon = menuBarIcon(for: editor) {
+            if button.image !== icon { button.image = icon }
+            button.toolTip = "Tracking \(editor.displayName)"
+        } else {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            let image = NSImage(systemSymbolName: appState.menuBarSymbol, accessibilityDescription: "Resolve Edit Tracker")?
+                .withSymbolConfiguration(cfg)
+            image?.isTemplate = true
+            button.image = image
+            button.toolTip = "Resolve Edit Tracker"
+        }
         if let text = appState.menuBarText {
             button.title = " " + text
             button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         } else {
             button.title = ""
         }
+    }
+
+    private var iconCache: [EditorApp: NSImage] = [:]
+
+    private func menuBarIcon(for app: EditorApp) -> NSImage? {
+        if let cached = iconCache[app] { return cached }
+        guard let source = EditorCatalog.icon(for: app), let icon = source.copy() as? NSImage else { return nil }
+        icon.size = NSSize(width: 18, height: 18)
+        icon.isTemplate = false
+        iconCache[app] = icon
+        return icon
     }
 
     // MARK: - Popover

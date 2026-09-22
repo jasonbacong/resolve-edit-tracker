@@ -46,6 +46,7 @@ cat > "$DIST/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSAppleEventsUsageDescription</key><string>Reads the open project and composition in After Effects so your time is recorded against the right one.</string>
   ${ICON_KEY}
 </dict>
 </plist>

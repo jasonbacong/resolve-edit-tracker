@@ -1,10 +1,14 @@
 import SwiftUI
 import AppKit
+import ApplicationServices
+import Combine
 
 struct SettingsView: View {
     @EnvironmentObject var app: AppState
     @State private var importResult: String?
     @State private var confirmClear = false
+    @State private var axGranted = AXIsProcessTrusted()
+    private let axPoll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     private var defaultRateHint: String {
         Fmt.money(app.settings.rate, currency: app.settings.currency)
@@ -56,10 +60,53 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
+            Section {
+                ForEach(EditorApp.allCases) { editor in
+                    let installed = EditorCatalog.isInstalled(editor)
+                    Toggle(isOn: enabledBinding(editor)) {
+                        HStack(spacing: 8) {
+                            if let icon = EditorCatalog.icon(for: editor) {
+                                Image(nsImage: icon).resizable().frame(width: 18, height: 18)
+                            } else {
+                                Image(systemName: editor.symbolName).frame(width: 18, height: 18)
+                            }
+                            Text(editor.displayName)
+                            if !installed {
+                                Text("not installed").font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+
+                Toggle("Record project, sequence and composition names",
+                       isOn: $app.settings.trackDocumentDetail)
+                Text("Premiere Pro: the open project, read from its window — needs Accessibility access. After Effects: the project and active composition — macOS asks once to allow it. Photoshop and Lightroom are tracked as time in the app.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if app.settings.trackDocumentDetail && !axGranted {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("Accessibility access not granted").font(.caption)
+                        Spacer()
+                        Button("Open Privacy Settings…") {
+                            app.requestAccessibility()
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            } header: {
+                Text("Apps")
+            } footer: {
+                Text("Switch between apps and the session follows — the menu-bar icon changes to show which one is being tracked.")
+                    .font(.caption)
+            }
+
             Section("Tracking") {
-                Toggle("Only track while DaVinci Resolve is the active app",
+                Toggle("Only track Resolve while it's the active app",
                        isOn: $app.settings.trackOnlyWhenFrontmost)
-                Text("Switch to another app and the timer freezes; if you stay away for more than a minute the session is saved. Playback inside Resolve still counts as working. Turn this off to track whenever a project is open, regardless of what's in front.")
+                Text("Switch to another app and the timer freezes; if you stay away for more than a minute the session is saved. Playback inside Resolve still counts as working. Adobe apps are always tracked this way.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 LabeledContent("Idle stop") {
@@ -115,11 +162,22 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 420, idealWidth: 480, maxWidth: 640,
                minHeight: 360, idealHeight: 640, maxHeight: .infinity)
+        .onReceive(axPoll) { _ in axGranted = AXIsProcessTrusted() }
         .confirmationDialog("Delete every recorded session? This cannot be undone.",
                             isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Delete all history", role: .destructive) { app.clearHistory() }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    private func enabledBinding(_ editor: EditorApp) -> Binding<Bool> {
+        Binding(
+            get: { app.settings.enabledEditors.contains(editor) },
+            set: { on in
+                if on { app.settings.enabledEditors.insert(editor) }
+                else { app.settings.enabledEditors.remove(editor) }
+            }
+        )
     }
 
     private func rateBinding(for project: String) -> Binding<String> {

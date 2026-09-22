@@ -197,10 +197,18 @@ struct Stats: Equatable {
     var projectTotalSec: Double = 0
     var projectEarnings: Double = 0
     var breakdown: [PageStat] = []
+    var breakdownIsPages = true        // Resolve pages; otherwise sequence / comp names
+    var todayByApp: [AppStat] = []
 
     struct PageStat: Equatable, Identifiable {
         var id: String { page }
         var page: String
+        var seconds: Double
+    }
+
+    struct AppStat: Equatable, Identifiable {
+        var id: String { app.rawValue }
+        var app: EditorApp
         var seconds: Double
     }
 }

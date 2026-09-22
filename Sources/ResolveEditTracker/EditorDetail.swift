@@ -132,6 +132,9 @@ final class EditorDetailProbe {
     // so both the project file and the active composition are available.
 
     private static func afterEffectsDetail() -> EditorDetail? {
+        // Address the running copy by its own ID (currently com.adobe.AfterEffects.application)
+        // rather than guessing one that may change between releases.
+        guard let bundleID = runningApp(.afterEffects)?.bundleIdentifier else { return nil }
         let js = """
         var p = app.project; \
         var d = (p && p.file) ? p.file.name : 'Untitled Project.aep'; \
@@ -140,7 +143,7 @@ final class EditorDetailProbe {
         d + '\\t' + c
         """
         let script = """
-        tell application id "com.adobe.AfterEffects"
+        tell application id "\(bundleID)"
             DoScript "\(js.replacingOccurrences(of: "\"", with: "\\\""))"
         end tell
         """
@@ -155,11 +158,13 @@ final class EditorDetailProbe {
 
     // MARK: - Helpers
 
-    private static func pid(of app: EditorApp) -> pid_t? {
-        NSWorkspace.shared.runningApplications
-            .first { EditorApp.matching(bundleID: $0.bundleIdentifier) == app }?
-            .processIdentifier
+    private static func runningApp(_ app: EditorApp) -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first {
+            $0.activationPolicy == .regular && EditorApp.matching(bundleID: $0.bundleIdentifier) == app
+        }
     }
+
+    private static func pid(of app: EditorApp) -> pid_t? { runningApp(app)?.processIdentifier }
 
     /// Runs AppleScript in a child process so a wedged Apple Event can be killed.
     /// `NSAppleScript` runs in-process and offers no way out if the target never answers.

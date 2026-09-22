@@ -30,11 +30,17 @@ struct MenuContentView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            Image(systemName: app.menuBarSymbol)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(app.state == .tracking ? Color.accentColor : .secondary)
+            if app.state != .notInProject, let icon = EditorCatalog.icon(for: app.sessionApp) {
+                Image(nsImage: icon)
+                    .resizable().frame(width: 26, height: 26)
+                    .opacity(app.state == .tracking ? 1 : 0.45)
+            } else {
+                Image(systemName: app.menuBarSymbol)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
             VStack(alignment: .leading, spacing: 1) {
-                Text(app.status.project ?? app.stats.project ?? "Resolve Edit Tracker")
+                Text(app.headerTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(app.statusLine)
@@ -79,9 +85,31 @@ struct MenuContentView: View {
     private var totals: some View {
         VStack(spacing: 6) {
             row("Today", Fmt.hms(app.stats.todaySec))
+            if app.stats.todayByApp.count > 1 {
+                todayByApp
+            }
             row("This week", Fmt.hms(app.stats.weekSec))
             row("Project total", Fmt.hms(app.stats.projectTotalSec))
             row("Earnings", Fmt.money(app.stats.projectEarnings, currency: app.settings.currency))
+        }
+    }
+
+    /// Only shown once more than one app has been used today, so a Resolve-only day
+    /// looks exactly like it always has.
+    private var todayByApp: some View {
+        HStack(spacing: 10) {
+            ForEach(app.stats.todayByApp) { item in
+                HStack(spacing: 4) {
+                    if let icon = EditorCatalog.icon(for: item.app) {
+                        Image(nsImage: icon).resizable().frame(width: 13, height: 13)
+                    }
+                    Text(Fmt.hm(item.seconds))
+                        .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .help(item.app.displayName)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -104,9 +132,13 @@ struct MenuContentView: View {
             let maxSec = app.stats.breakdown.map(\.seconds).max() ?? 1
             ForEach(app.stats.breakdown.prefix(6)) { item in
                 HStack(spacing: 8) {
-                    Text(ResolvePage(rawValue: item.page)?.displayName ?? item.page.capitalized)
+                    Text(app.stats.breakdownIsPages
+                         ? (ResolvePage(rawValue: item.page)?.displayName ?? item.page.capitalized)
+                         : item.page)
                         .font(.system(size: 11))
-                        .frame(width: 62, alignment: .leading)
+                        .lineLimit(1).truncationMode(.middle)
+                        .frame(width: app.stats.breakdownIsPages ? 62 : 96, alignment: .leading)
+                        .help(item.page)
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(Color.primary.opacity(0.08))
@@ -146,7 +178,7 @@ struct MenuContentView: View {
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .disabled(app.state == .notInProject && !app.status.hasProject)
+            .disabled(!app.canToggle)
 
             HStack(spacing: 6) {
                 Button { openHistory() } label: {

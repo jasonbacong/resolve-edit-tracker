@@ -73,8 +73,13 @@ enum EditorApp: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Background companions Adobe installs next to the real apps. They share the app's
+    /// bundle-ID prefix but are never the thing you're editing in.
+    private static let companionMarkers = ["renderengine", "helper", "crashreporter"]
+
     static func matching(bundleID: String?) -> EditorApp? {
-        guard let id = bundleID?.lowercased(), !id.isEmpty else { return nil }
+        guard let id = bundleID?.lowercased(), !id.isEmpty,
+              !companionMarkers.contains(where: { id.contains($0) }) else { return nil }
         return allCases.first { app in
             app.bundleIDPrefixes.contains { id.hasPrefix($0) }
         }

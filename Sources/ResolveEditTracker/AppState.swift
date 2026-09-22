@@ -46,8 +46,14 @@ final class AppState: ObservableObject {
 
     // Non-Resolve editors (Premiere, After Effects, Photoshop, Lightroom). These have no
     // scripting API worth the name, so being frontmost is the only signal we get.
+    @Published private(set) var sessionApp: EditorApp = .resolve   // app of the current / last-paused session
     private let detailProbe = EditorDetailProbe()
     private var activeUnit: String?           // current sequence / composition
+    private var pendingApp: EditorApp?        // editor that just came to the front
+    private var pendingAppSince = Date.distantPast
+    private let appSwitchGrace: TimeInterval = 8  // a quick peek at another app doesn't split the session
+    private var pendingDoc: String?
+    private var pendingDocSince = Date.distantPast
 
     // Playback detection — a moving playhead means the user is reviewing, not idle.
     private var lastTimecode: String?
@@ -58,7 +64,7 @@ final class AppState: ObservableObject {
     private enum IdlePauseReason { case idle, away }
     private var idlePauseReason: IdlePauseReason = .idle
 
-    private enum StartReason { case fresh, resume, projectSwitch }
+    private enum StartReason { case fresh, resume, projectSwitch, appSwitch }
 
     /// What Resolve is doing right now, distilled from a probe reading.
     private enum Presence {
@@ -168,9 +174,18 @@ final class AppState: ObservableObject {
         }
         let confirmedOut = now.timeIntervalSince(lastInProjectAt) >= stopGrace(for: p)
 
+        // While an Adobe session owns the tracker, Resolve readings are kept for display
+        // but must not drive state — "Resolve has no project" is not a reason to stop
+        // a Premiere session.
+        if sessionApp != .resolve && state != .notInProject {
+            rebuildStats()
+            return
+        }
+
         switch state {
         case .notInProject:
-            guard case .editing(let project) = p else { pendingProject = nil; break }
+            guard settings.enabledEditors.contains(.resolve),
+                  case .editing(let project) = p else { pendingProject = nil; break }
             // Require the name to hold briefly before starting — filters the default
             // "Untitled Project" name Resolve flashes during load / modal tasks.
             if pendingProject != project {
@@ -285,35 +300,58 @@ final class AppState: ObservableObject {
 
     /// Whether the frontmost-app requirement (if enabled) is currently met.
     private var trackingGateOpen: Bool {
-        !settings.trackOnlyWhenFrontmost || isResolveFrontmost()
+        settings.enabledEditors.contains(.resolve)
+            && (!settings.trackOnlyWhenFrontmost || isResolveFrontmost())
     }
 
-    private func enterTracking(project: String, reason: StartReason) {
-        beginSession(project: project)
+    private func isRunning(_ app: EditorApp) -> Bool {
+        NSWorkspace.shared.runningApplications.contains {
+            $0.activationPolicy == .regular && EditorApp.matching(bundleID: $0.bundleIdentifier) == app
+        }
+    }
+
+    /// The document (and sequence/comp) open in an Adobe app, if detail tracking is on
+    /// and the app answered. Falls back to the app's own name.
+    private func documentName(for app: EditorApp) -> (project: String, unit: String?) {
+        guard settings.trackDocumentDetail, app != .resolve, app.unitLabel != nil,
+              let d = detailProbe.detail(for: app), let doc = d.document
+        else { return (app.displayName, nil) }
+        return (doc, d.unit)
+    }
+
+    private func enterTracking(project: String, reason: StartReason,
+                               app: EditorApp = .resolve, unit: String? = nil,
+                               creditSince: Date? = nil) {
+        beginSession(project: project, app: app, unit: unit, creditSince: creditSince)
         state = .tracking
+        let label = app == .resolve || project == app.displayName
+            ? project : "\(app.shortName) · \(project)"
         switch reason {
         case .fresh:
-            Log.write("▶︎ start tracking — \(project)")
+            Log.write("▶︎ start tracking — \(label)")
             ToastController.shared.show(
-                title: "Tracking started", subtitle: project,
+                title: "Tracking started", subtitle: label,
                 symbol: "record.circle.fill",
                 playSound: settings.playSoundOnStart, soundName: settings.soundName
             )
         case .resume:
-            Log.write("▶︎ resume — \(project)")
+            Log.write("▶︎ resume — \(label)")
             if settings.toastOnIdleResume {
                 ToastController.shared.show(
-                    title: "Resumed", subtitle: project,
+                    title: "Resumed", subtitle: label,
                     symbol: "record.circle.fill",
                     playSound: false, soundName: settings.soundName
                 )
             }
         case .projectSwitch:
             ToastController.shared.show(
-                title: "Switched project", subtitle: project,
+                title: "Switched project", subtitle: label,
                 symbol: "arrow.triangle.2.circlepath",
                 playSound: false, soundName: settings.soundName
             )
+        case .appSwitch:
+            // The menu-bar icon changing is the signal; a toast on every app switch is noise.
+            Log.write("⇄ switched app → \(label)")
         }
         announcedProject = project
     }
@@ -326,7 +364,190 @@ final class AppState: ObservableObject {
         lastTick = now
 
         let idle = IdleMonitor.idleSeconds()
+        let front = frontmostEnabledEditor()
 
+        if state == .tracking && sessionApp != .resolve {
+            tickTrackingOther(front: front, now: now, dt: dt, idle: idle)
+        } else if let front, front != .resolve {
+            tickEnterOther(front, now: now, dt: dt, idle: idle)
+        } else {
+            pendingApp = nil
+            // Paused in an Adobe app that has since quit — nothing left to resume there.
+            if state.isPaused, sessionApp != .resolve, !isRunning(sessionApp) {
+                state = .notInProject
+                sessionApp = .resolve
+                announcedProject = nil
+            }
+            tickResolve(now: now, dt: dt, idle: idle)
+        }
+
+        tickCount += 1
+        if tickCount % 20 == 0 { store.saveCurrent(current) }
+        rebuildStats()
+    }
+
+    // MARK: Adobe apps
+
+    /// Tracking an Adobe app: accrue while it's in front; when something else is, freeze,
+    /// then hand over to the new editor or save the session.
+    private func tickTrackingOther(front: EditorApp?, now: Date, dt: Double, idle: Double) {
+        let app = sessionApp
+        guard isRunning(app) else {
+            endSession(autoNote: "(auto-stopped: \(app.shortName) quit)")
+            state = .notInProject
+            sessionApp = .resolve
+            announcedProject = nil
+            Log.write("⏹ \(app.shortName) quit")
+            return
+        }
+
+        if front == app {
+            awaySince = nil
+            pendingApp = nil
+            followDocument(in: app, now: now)
+            guard state == .tracking, sessionApp == app else { return }   // a document switch restarted us
+            accrue(dt: dt, now: now, page: app.rawValue, unit: activeUnit)
+            if settings.idleMinutes > 0, idle >= Double(settings.idleMinutes) * 60 {
+                endSession(autoNote: "(auto-stopped: idle)")
+                state = .idlePaused
+                idlePauseReason = .idle
+                Log.write("⏸ idle pause — \(app.shortName) (idle \(Int(idle))s)")
+            }
+            return
+        }
+
+        // Something else is in front — freeze the clock.
+        elapsed = current?.durationSec ?? 0
+        if awaySince == nil { awaySince = now }
+        let since = awaySince!
+        let away = now.timeIntervalSince(since)
+
+        // Another tracked editor held the front long enough: hand the time over to it.
+        if let front, away >= appSwitchGrace {
+            if front == .resolve {
+                if status.hasProject, let project = status.project {
+                    endSession(autoNote: "(auto-stopped: switched to Resolve)")
+                    enterTracking(project: project, reason: .appSwitch,
+                                  unit: status.timeline, creditSince: since)
+                    return
+                }
+            } else {
+                let doc = documentName(for: front)
+                endSession(autoNote: "(auto-stopped: switched to \(front.shortName))")
+                enterTracking(project: doc.project, reason: .appSwitch,
+                              app: front, unit: doc.unit, creditSince: since)
+                return
+            }
+        }
+
+        if away >= awayGraceSec {
+            endSession(autoNote: "(auto-stopped: switched away from \(app.shortName))")
+            state = .idlePaused
+            idlePauseReason = .away
+            awaySince = nil
+            Log.write("⏸ away from \(app.shortName)")
+        }
+    }
+
+    /// An Adobe app is in front and we're not yet tracking it.
+    private func tickEnterOther(_ app: EditorApp, now: Date, dt: Double, idle: Double) {
+        if pendingApp != app {
+            pendingApp = app
+            pendingAppSince = now
+        }
+
+        switch state {
+        case .tracking:
+            // Moving from Resolve. Freeze it; hand over once the new app has stuck.
+            elapsed = current?.durationSec ?? 0
+            busySince = nil
+            guard now.timeIntervalSince(pendingAppSince) >= appSwitchGrace else { return }
+            let doc = documentName(for: app)
+            endSession(autoNote: "(auto-stopped: switched to \(app.shortName))")
+            enterTracking(project: doc.project, reason: .appSwitch,
+                          app: app, unit: doc.unit, creditSince: pendingAppSince)
+
+        case .idlePaused where app == sessionApp:
+            // Back in the app we paused in — resume on the first input, like Resolve.
+            elapsed = 0
+            guard idle < 2 else { return }
+            let doc = documentName(for: app)
+            let project = doc.project == app.displayName ? (activeProject ?? doc.project) : doc.project
+            enterTracking(project: project,
+                          reason: announcedProject == project ? .resume : .fresh,
+                          app: app, unit: doc.unit ?? activeUnit)
+
+        case .idlePaused, .notInProject:
+            // Starting fresh needs a few seconds of real use, so a quick peek at an app
+            // doesn't leave a stub session behind.
+            elapsed = 0
+            if idle >= 10 { pendingAppSince = now; return }
+            guard now.timeIntervalSince(pendingAppSince) >= appSwitchGrace else { return }
+            let doc = documentName(for: app)
+            enterTracking(project: doc.project, reason: .fresh,
+                          app: app, unit: doc.unit, creditSince: pendingAppSince)
+
+        case .manuallyPaused:
+            elapsed = 0
+            guard app == sessionApp, idle < 3, dt > 0, dt < 5 else {
+                activeWhilePausedSec = 0
+                return
+            }
+            activeWhilePausedSec += dt
+            guard activeWhilePausedSec >= manualResumeAfterSec else { return }
+            activeWhilePausedSec = 0
+            Log.write("▶︎ auto-resume from manual pause (kept working)")
+            enterTracking(project: activeProject ?? app.displayName, reason: .resume,
+                          app: app, unit: activeUnit)
+        }
+    }
+
+    /// Keeps the session's document and sequence in step with the app. The first real
+    /// name to arrive just labels the session (it may start before the app answers); a
+    /// later change of document splits it, once the new name has held for a few seconds.
+    private func followDocument(in app: EditorApp, now: Date) {
+        guard settings.trackDocumentDetail, app.unitLabel != nil,
+              let d = detailProbe.detail(for: app), let doc = d.document else { return }
+        activeUnit = d.unit
+
+        if doc == activeProject { pendingDoc = nil; return }
+
+        if activeProject == app.displayName, var s = current {
+            s.project = doc
+            s.rate = settings.rate(for: doc)
+            current = s
+            activeProject = doc
+            announcedProject = doc
+            return
+        }
+
+        if pendingDoc != doc {
+            pendingDoc = doc
+            pendingDocSince = now
+            return
+        }
+        guard now.timeIntervalSince(pendingDocSince) >= switchGrace else { return }
+        endSession(autoNote: "(auto-stopped: switched project)")
+        enterTracking(project: doc, reason: .projectSwitch, app: app, unit: d.unit)
+        Log.write("⇄ switched project → \(app.shortName) — \(doc)")
+    }
+
+    private func accrue(dt: Double, now: Date, page: String, unit: String?) {
+        guard dt > 0, dt < 5, var session = current else {
+            elapsed = current?.durationSec ?? 0
+            return
+        }
+        session.pageSeconds[page, default: 0] += dt
+        if let unit { session.timelineSeconds[unit, default: 0] += dt }
+        session.durationSec = session.pageSeconds.values.reduce(0, +)
+        session.end = now
+        current = session
+        elapsed = session.durationSec
+    }
+
+    // MARK: Resolve
+
+    private func tickResolve(now: Date, dt: Double, idle: Double) {
         switch state {
         case .tracking:
             if let pg = status.pageEnum?.rawValue { lastKnownPage = pg }
@@ -417,30 +638,42 @@ final class AppState: ObservableObject {
         case .notInProject:
             elapsed = 0
         }
-
-        tickCount += 1
-        if tickCount % 20 == 0 { store.saveCurrent(current) }
-        rebuildStats()
     }
 
     // MARK: - Session bookkeeping
 
-    private func beginSession(project: String) {
+    /// `creditSince` backdates the start — used when handing over between apps, so the
+    /// seconds spent confirming the switch belong to the new app rather than vanishing.
+    private func beginSession(project: String, app: EditorApp = .resolve,
+                              unit: String? = nil, creditSince: Date? = nil) {
         activeProject = project
+        activeUnit = unit
+        sessionApp = app
         busySince = nil
         awaySince = nil
         pendingProject = nil
+        pendingApp = nil
+        pendingDoc = nil
         zeroInputSince = nil
         let now = Date()
-        current = Session(
+        let start = min(creditSince ?? now, now)
+        let credited = now.timeIntervalSince(start)
+        var session = Session(
+            app: app,
             project: project,
-            start: now,
+            start: start,
             end: now,
-            durationSec: 0,
+            durationSec: credited,
             rate: settings.rate(for: project),
             currency: settings.currency,
             note: ""
         )
+        if credited > 0 {
+            session.pageSeconds[app == .resolve ? lastKnownPage : app.rawValue] = credited
+            if let unit { session.timelineSeconds[unit] = credited }
+        }
+        current = session
+        elapsed = credited
         lastTick = now
         store.saveCurrent(current)
     }
@@ -471,7 +704,10 @@ final class AppState: ObservableObject {
             activeWhilePausedSec = 0
             Log.write("⏸ manual pause")
         case .manuallyPaused, .idlePaused:
-            if status.hasProject, let project = status.project {
+            if sessionApp != .resolve, isRunning(sessionApp) {
+                enterTracking(project: activeProject ?? sessionApp.displayName, reason: .resume,
+                              app: sessionApp, unit: activeUnit)
+            } else if status.hasProject, let project = status.project {
                 enterTracking(project: project,
                               reason: announcedProject == project ? .resume : .fresh)
             }
@@ -479,6 +715,15 @@ final class AppState: ObservableObject {
             break
         }
         rebuildStats(force: true)
+    }
+
+    /// Whether the Pause/Resume button has anything to act on.
+    var canToggle: Bool {
+        switch state {
+        case .tracking:                   return true
+        case .idlePaused, .manuallyPaused: return (sessionApp != .resolve && isRunning(sessionApp)) || status.hasProject
+        case .notInProject:               return false
+        }
     }
 
     func flushForQuit() {
@@ -498,14 +743,18 @@ final class AppState: ObservableObject {
         var s = session
         s.durationSec = max(0, s.durationSec)
         s.end = s.start.addingTimeInterval(s.durationSec)
-        if s.pageSeconds.isEmpty { s.pageSeconds = ["edit": s.durationSec] }
+        if s.pageSeconds.isEmpty {
+            s.pageSeconds = [s.app == .resolve ? ResolvePage.edit.rawValue : s.app.rawValue: s.durationSec]
+        }
         store.update(s)
         rebuildStats(force: true)
     }
 
-    func addManualSession(project: String, start: Date, minutes: Double, note: String, page: ResolvePage) {
+    func addManualSession(project: String, start: Date, minutes: Double, note: String,
+                          page: ResolvePage, app: EditorApp = .resolve) {
         let dur = max(0, minutes * 60)
         let s = Session(
+            app: app,
             project: project.isEmpty ? "Untitled" : project,
             start: start,
             end: start.addingTimeInterval(dur),
@@ -513,7 +762,7 @@ final class AppState: ObservableObject {
             rate: settings.rate(for: project),
             currency: settings.currency,
             note: note,
-            pageSeconds: [page.rawValue: dur],
+            pageSeconds: [app == .resolve ? page.rawValue : app.rawValue: dur],
             timelineSeconds: [:],
             manual: true
         )
@@ -545,17 +794,37 @@ final class AppState: ObservableObject {
         let now = Date()
         if !force && now.timeIntervalSince(lastStatsAt) < 2 { return }
         lastStatsAt = now
+        let app = state == .notInProject ? EditorApp.resolve : sessionApp
         stats = StatsBuilder.build(
             sessions: store.sessions,
             current: current,
-            project: status.project ?? activeProject
+            project: app == .resolve ? (status.project ?? activeProject) : activeProject,
+            app: app
         )
+    }
+
+    /// Reading Premiere's window needs Accessibility access for this app.
+    var accessibilityGranted: Bool { AXIsProcessTrusted() }
+
+    func requestAccessibility() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     }
 
     private func onSettingsChanged(from old: Settings) {
         if settings.launchAtLogin != old.launchAtLogin {
             let effective = LoginItem.setEnabled(settings.launchAtLogin)
             if effective != settings.launchAtLogin { settings.launchAtLogin = effective }
+        }
+        if settings.trackDocumentDetail && !old.trackDocumentDetail && !accessibilityGranted {
+            requestAccessibility()
+        }
+        // An app was switched off while we were tracking it.
+        if state == .tracking, !settings.enabledEditors.contains(sessionApp) {
+            endSession(autoNote: "(tracking turned off for \(sessionApp.shortName))")
+            state = .notInProject
+            sessionApp = .resolve
+            announcedProject = nil
         }
         if let data = try? JSONEncoder.pretty.encode(settings) {
             try? data.write(to: settingsURL, options: .atomic)
@@ -580,7 +849,24 @@ final class AppState: ObservableObject {
         return Fmt.hms(elapsed)
     }
 
+    /// The editor whose icon belongs in the menu bar: the one being tracked.
+    var menuBarEditor: EditorApp? { state == .tracking ? sessionApp : nil }
+
+    var headerTitle: String {
+        switch state {
+        case .tracking, .idlePaused, .manuallyPaused:
+            if sessionApp != .resolve { return activeProject ?? sessionApp.displayName }
+            return status.project ?? activeProject ?? "Resolve Edit Tracker"
+        case .notInProject:
+            return status.project ?? stats.project ?? "Resolve Edit Tracker"
+        }
+    }
+
     var statusLine: String {
+        if state == .tracking && sessionApp != .resolve {
+            if let unit = activeUnit { return "\(sessionApp.shortName) · \(unit)" }
+            return "Tracking · \(sessionApp.shortName)"
+        }
         switch state {
         case .tracking:
             if status.rendering { return "Tracking · Rendering" }
@@ -589,7 +875,8 @@ final class AppState: ObservableObject {
                 return "Tracking · \(last)"
             }
             return "Tracking · \(status.pageEnum?.displayName ?? status.page ?? "—")"
-        case .idlePaused:     return idlePauseReason == .away ? "Paused · switch to Resolve" : "Paused (idle)"
+        case .idlePaused:
+            return idlePauseReason == .away ? "Paused · switch to \(sessionApp.shortName)" : "Paused (idle)"
         case .manuallyPaused: return "Paused"
         case .notInProject:
             switch connection {

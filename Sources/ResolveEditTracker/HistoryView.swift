@@ -21,18 +21,28 @@ struct HistoryView: View {
         .sheet(isPresented: $showingAdd) {
             SessionEditSheet(mode: .add, projects: app.projectNames, currency: app.settings.currency) { result in
                 app.addManualSession(project: result.project, start: result.start,
-                                     minutes: result.minutes, note: result.note, page: result.page)
+                                     minutes: result.minutes, note: result.note,
+                                     page: result.page, app: result.app)
             }
         }
         .sheet(item: $editing) { session in
             SessionEditSheet(mode: .edit(session), projects: app.projectNames, currency: app.settings.currency) { result in
                 var s = session
+                s.app = result.app
                 s.project = result.project
                 s.start = result.start
-                s.durationSec = result.minutes * 60
                 s.note = result.note
-                s.pageSeconds = [result.page.rawValue: result.minutes * 60]
-                s.timelineSeconds = [:]   // a hand-edited session no longer claims timeline splits
+                // Only rewrite the time breakdown if the time itself was changed — editing
+                // a note or project must not flatten the page / sequence splits.
+                let originalPage = session.pageSeconds.max(by: { $0.value < $1.value })?.key
+                let pageKey = result.app == .resolve ? result.page.rawValue : result.app.rawValue
+                let timeChanged = result.minutes != (session.durationSec / 60).rounded()
+                    || result.app != session.app || pageKey != originalPage
+                if timeChanged {
+                    s.durationSec = result.minutes * 60
+                    s.pageSeconds = [pageKey: s.durationSec]
+                    s.timelineSeconds = [:]
+                }
                 if result.project != session.project { s.rate = app.settings.rate(for: result.project) }
                 app.updateSession(s)
             }
@@ -49,7 +59,21 @@ struct HistoryView: View {
             TableColumn("When") { s in
                 Text(Fmt.sessionDate.string(from: s.start)).monospacedDigit()
             }.width(min: 108, ideal: 116)
-            TableColumn("Project") { s in Text(s.project).lineLimit(1) }
+            TableColumn("App") { s in
+                HStack(spacing: 5) {
+                    if let icon = EditorCatalog.icon(for: s.app) {
+                        Image(nsImage: icon).resizable().frame(width: 14, height: 14)
+                    }
+                    Text(s.app.shortName).lineLimit(1)
+                }
+            }.width(min: 80, ideal: 100)
+            TableColumn("Project") { s in
+                if let top = s.timelineSeconds.max(by: { $0.value < $1.value })?.key, s.app != .resolve {
+                    (Text("\(s.project)  ") + Text(top).foregroundColor(.secondary)).lineLimit(1)
+                } else {
+                    Text(s.project).lineLimit(1)
+                }
+            }
             TableColumn("Duration") { s in
                 Text(Fmt.hms(s.durationSec)).monospacedDigit().foregroundStyle(.secondary)
             }.width(min: 70, ideal: 78)
@@ -123,6 +147,7 @@ struct HistoryView: View {
 // MARK: - Add / edit sheet
 
 struct SessionEditResult {
+    var app: EditorApp
     var project: String
     var start: Date
     var minutes: Double
@@ -143,6 +168,7 @@ struct SessionEditSheet: View {
     @State private var start = Date()
     @State private var minutes = 30.0
     @State private var page = ResolvePage.edit
+    @State private var editor = EditorApp.resolve
     @State private var note = ""
 
     private var isEdit: Bool { if case .edit = mode { return true } else { return false } }
@@ -152,6 +178,9 @@ struct SessionEditSheet: View {
             Text(isEdit ? "Edit session" : "Add a session").font(.headline)
 
             Form {
+                Picker("App", selection: $editor) {
+                    ForEach(EditorApp.allCases) { Text($0.displayName).tag($0) }
+                }
                 LabeledContent("Project") {
                     HStack(spacing: 6) {
                         TextField("Project name", text: $project)
@@ -177,8 +206,10 @@ struct SessionEditSheet: View {
                     Stepper("", value: $minutes, in: 0...1440, step: 5).labelsHidden()
                     Text("minutes").foregroundStyle(.secondary)
                 }
-                Picker("Page", selection: $page) {
-                    ForEach(ResolvePage.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                if editor == .resolve {
+                    Picker("Page", selection: $page) {
+                        ForEach(ResolvePage.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                    }
                 }
                 TextField("Note", text: $note)
             }
@@ -188,7 +219,8 @@ struct SessionEditSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(isEdit ? "Save" : "Add") {
-                    onSave(SessionEditResult(project: project, start: start, minutes: minutes, page: page, note: note))
+                    onSave(SessionEditResult(app: editor, project: project, start: start,
+                                             minutes: minutes, page: page, note: note))
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -199,6 +231,7 @@ struct SessionEditSheet: View {
         .frame(width: 380)
         .onAppear {
             if case .edit(let s) = mode {
+                editor = s.app
                 project = s.project
                 start = s.start
                 minutes = (s.durationSec / 60).rounded()

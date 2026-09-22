@@ -41,46 +41,64 @@ enum Timesheet {
             let daySessions = byDay[day]!.sorted { $0.start < $1.start }
             let daySec = daySessions.reduce(0) { $0 + $1.durationSec }
             let dayEarn = daySessions.reduce(0) { $0 + $1.earnings }
-            body += "<tr class='day'><td colspan='5'>\(dayFmt.string(from: day))</td></tr>"
+            body += "<tr class='day'><td colspan='6'>\(dayFmt.string(from: day))</td></tr>"
             for s in daySessions {
                 let span = "\(timeFmt.string(from: s.start))–\(timeFmt.string(from: s.end))"
                 let note = s.note.isEmpty ? (s.manual ? "manual entry" : "") : escape(s.note)
+                // Timelines / sequences / comps worked on in this session, biggest first.
+                let units = s.timelineSeconds
+                    .filter { $0.key != "—" && $0.value >= 30 }
+                    .sorted { $0.value > $1.value }
+                    .map { "\(escape($0.key)) \(String(format: "%.1f", $0.value / 3600))h" }
+                    .joined(separator: " · ")
                 body += """
                 <tr>
                   <td class='t'>\(span)</td>
-                  <td>\(escape(s.project))</td>
+                  <td class='a'>\(escape(s.app.shortName))</td>
+                  <td>\(escape(s.project))\(units.isEmpty ? "" : "<div class='u'>\(units)</div>")</td>
                   <td class='r'>\(hours(s.durationSec))</td>
                   <td class='r'>\(money(s.rate))/h</td>
                   <td class='r'>\(money(s.earnings))</td>
                 </tr>
                 """
                 if !note.isEmpty {
-                    body += "<tr class='note'><td></td><td colspan='4'>\(note)</td></tr>"
+                    body += "<tr class='note'><td></td><td></td><td colspan='4'>\(note)</td></tr>"
                 }
             }
             body += """
             <tr class='subtotal'>
-              <td colspan='2'>\(dayFmt.string(from: day)) subtotal</td>
+              <td colspan='3'>\(dayFmt.string(from: day)) subtotal</td>
               <td class='r'>\(hours(daySec))</td><td></td>
               <td class='r'>\(money(dayEarn))</td>
             </tr>
             """
         }
 
-        // Breakdown
+        // Breakdowns
+        var appAgg: [EditorApp: (sec: Double, earn: Double)] = [:]
         var pageAgg: [String: Double] = [:]
-        var tlAgg: [String: Double] = [:]
+        var unitAgg: [String: Double] = [:]
         for s in rows {
-            for (k, v) in s.pageSeconds { pageAgg[k, default: 0] += v }
-            for (k, v) in s.timelineSeconds { tlAgg[k, default: 0] += v }
+            appAgg[s.app, default: (0, 0)].sec += s.durationSec
+            appAgg[s.app, default: (0, 0)].earn += s.earnings
+            if s.app == .resolve {
+                for (k, v) in s.pageSeconds { pageAgg[k, default: 0] += v }
+            }
+            for (k, v) in s.timelineSeconds where k != "—" {
+                let label = s.app == .resolve ? k : "\(k) (\(s.app.shortName))"
+                unitAgg[label, default: 0] += v
+            }
         }
         func breakdownList(_ dict: [String: Double], transform: (String) -> String) -> String {
             dict.filter { $0.value >= 1 }.sorted { $0.value > $1.value }
                 .map { "<li>\(escape(transform($0.key))) — \(hours($0.value))</li>" }
                 .joined()
         }
+        let appHTML = appAgg.sorted { $0.value.sec > $1.value.sec }
+            .map { "<li>\(escape($0.key.displayName)) — \(hours($0.value.sec)) · \(money($0.value.earn))</li>" }
+            .joined()
         let pageHTML = breakdownList(pageAgg) { ResolvePage(rawValue: $0)?.displayName ?? $0.capitalized }
-        let tlHTML = breakdownList(tlAgg) { $0 == "—" ? "No timeline" : $0 }
+        let unitHTML = breakdownList(unitAgg) { $0 }
 
         let title = range.project ?? "All projects"
         let periodFmt = DateFormatter(); periodFmt.dateFormat = "d MMM yyyy"
@@ -100,6 +118,8 @@ enum Timesheet {
           th { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #888; border-bottom: 2px solid #ccc; }
           td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
           td.t { color: #666; font-variant-numeric: tabular-nums; white-space: nowrap; }
+          td.a { color: #444; white-space: nowrap; }
+          .u { color: #888; font-size: 12px; margin-top: 2px; }
           tr.day td { padding-top: 18px; font-weight: 600; border-bottom: none; }
           tr.note td { color: #888; font-size: 12px; padding-top: 0; border-bottom: 1px solid #f0f0f0; }
           tr.subtotal td { font-weight: 600; border-bottom: 2px solid #ccc; }
@@ -114,13 +134,14 @@ enum Timesheet {
         <h1>\(escape(title))</h1>
         <div class="sub">Timesheet · \(period)</div>
         <table>
-          <thead><tr><th>Time</th><th>Project</th><th class="r">Hours</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
-          <tbody>\(body.isEmpty ? "<tr><td colspan='5'>No sessions in this range.</td></tr>" : body)</tbody>
+          <thead><tr><th>Time</th><th>App</th><th>Project</th><th class="r">Hours</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+          <tbody>\(body.isEmpty ? "<tr><td colspan='6'>No sessions in this range.</td></tr>" : body)</tbody>
         </table>
         <div class="total"><span>Total — \(hours(totalSec))</span> <b>\(money(totalEarn))</b></div>
         <div class="cols">
-          <div><h3>By page</h3><ul>\(pageHTML.isEmpty ? "<li>—</li>" : pageHTML)</ul></div>
-          <div><h3>By timeline</h3><ul>\(tlHTML.isEmpty ? "<li>—</li>" : tlHTML)</ul></div>
+          <div><h3>By app</h3><ul>\(appHTML.isEmpty ? "<li>—</li>" : appHTML)</ul></div>
+          \(pageHTML.isEmpty ? "" : "<div><h3>Resolve pages</h3><ul>\(pageHTML)</ul></div>")
+          <div><h3>Timelines, sequences &amp; comps</h3><ul>\(unitHTML.isEmpty ? "<li>—</li>" : unitHTML)</ul></div>
         </div>
         <footer>Generated \(now.string(from: Date())) by Resolve Edit Tracker</footer>
         </body></html>
