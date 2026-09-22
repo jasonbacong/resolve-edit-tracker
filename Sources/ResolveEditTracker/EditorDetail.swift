@@ -6,6 +6,7 @@ import ApplicationServices
 struct EditorDetail: Equatable {
     var document: String?   // project / file name
     var unit: String?       // sequence / composition
+    var timecode: String?   // playhead; changes while playing back
 }
 
 /// Reads the open document (and where possible the active sequence/composition) from
@@ -74,35 +75,57 @@ final class EditorDetailProbe {
 
     // MARK: Premiere Pro — Accessibility only
     //
-    // Premiere's entire AppleScript dictionary is `capture` and `editoriginal`, so the
-    // open project can only be read off its window title.
+    // Premiere's entire AppleScript dictionary is `capture` and `editoriginal`, so both
+    // names come from its UI: the project from the window title, the active sequence
+    // from the Program Monitor's tab ("Program: <sequence>"), which always follows the
+    // sequence in focus even when several are open in the Timeline.
 
     private static func premiereDetail() -> EditorDetail? {
-        guard let pid = pid(of: .premiere) else { return nil }
-        guard AXIsProcessTrusted() else { return nil }
+        guard let pid = pid(of: .premiere), AXIsProcessTrusted() else { return nil }
         let ax = AXUIElementCreateApplication(pid)
 
-        var winsRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &winsRef) == .success,
-              let wins = winsRef as? [AXUIElement] else { return nil }
-
-        for w in wins {
-            var titleRef: AnyObject?
-            guard AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &titleRef) == .success,
-                  let title = titleRef as? String, !title.isEmpty else { continue }
-            if let parsed = parsePremiereTitle(title) { return parsed }
+        var detail: EditorDetail?
+        for w in axChildren(ax, kAXWindowsAttribute) {
+            if let title = axString(w, kAXTitleAttribute), let parsed = parsePremiereTitle(title) {
+                detail = parsed
+                break
+            }
         }
-        return nil
+        guard var detail else { return nil }
+
+        // The panel tabs sit ~3 levels down; searching 4 deep visits ~200 elements, ~10 ms.
+        var timecodes: [String] = []
+        var queue: [(AXUIElement, Int)] = [(ax, 0)]
+        var visited = 0
+        while !queue.isEmpty, visited < 1500 {
+            let (el, depth) = queue.removeFirst()
+            visited += 1
+            let role = axString(el, kAXRoleAttribute)
+            let desc = axString(el, kAXDescriptionAttribute)
+            if role == "AXRadioButton", let desc, desc.hasPrefix("Program: "), detail.unit == nil {
+                let name = String(desc.dropFirst("Program: ".count)).trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty, !name.hasPrefix("(") { detail.unit = name }   // "(no sequences)"
+            } else if role == "AXTextField", desc == "UI_HotText",
+                      let v = axString(el, kAXValueAttribute), looksLikeTimecode(v) {
+                timecodes.append(v)
+            }
+            if depth < 4 {
+                for c in axChildren(el, kAXChildrenAttribute) { queue.append((c, depth + 1)) }
+            }
+        }
+        if !timecodes.isEmpty { detail.timecode = timecodes.joined(separator: "|") }
+        return detail
     }
 
-    /// Premiere titles its main window after the open project, with the app name and
-    /// release year in front of it and sometimes the sequence behind it.
-    /// Handles the shapes seen in the wild:
+    /// Premiere titles its main window with the project's path, plus " *" while there
+    /// are unsaved changes — which must be dropped, or every save would look like a new
+    /// project. Also handles older shapes:
+    ///   "/Volumes/Work/Client/Cut.prproj *"
     ///   "Adobe Premiere Pro 2026 - /Users/me/Cut.prproj"
     ///   "Adobe Premiere Pro 2026 - Cut.prproj : Episode 3"
-    ///   "Cut.prproj"
     static func parsePremiereTitle(_ raw: String) -> EditorDetail? {
         var s = raw.trimmingCharacters(in: .whitespaces)
+        while s.hasSuffix("*") { s = String(s.dropLast()).trimmingCharacters(in: .whitespaces) }
         if let r = s.range(of: "Adobe Premiere Pro", options: .caseInsensitive), r.lowerBound == s.startIndex {
             s = String(s[r.upperBound...])
             // drop a release year and the separating dash
@@ -128,32 +151,45 @@ final class EditorDetailProbe {
 
     // MARK: After Effects — ExtendScript over Apple Events
     //
-    // AE exposes DoScript, which runs ExtendScript in-process and hands back the result,
-    // so both the project file and the active composition are available.
+    // AE's DoScript runs ExtendScript in-process, but in AE 2026 it always answers "0"
+    // whatever the script returns — so the script writes its answer to a temp file.
 
     private static func afterEffectsDetail() -> EditorDetail? {
         // Address the running copy by its own ID (currently com.adobe.AfterEffects.application)
         // rather than guessing one that may change between releases.
         guard let bundleID = runningApp(.afterEffects)?.bundleIdentifier else { return nil }
-        let js = """
-        var p = app.project; \
-        var d = (p && p.file) ? p.file.name : 'Untitled Project.aep'; \
-        var a = (p) ? p.activeItem : null; \
-        var c = (a && a instanceof CompItem) ? a.name : ''; \
-        d + '\\t' + c
-        """
+        let out = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ret-ae-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: out) }
+
+        let js = [
+            "var p = app.project;",
+            "var d = (p && p.file) ? p.file.name : 'Untitled Project.aep';",
+            "var a = p ? p.activeItem : null;",
+            "var isComp = (a && a instanceof CompItem);",
+            "var f = new File('\(out.path)'); f.encoding = 'UTF-8'; f.open('w');",
+            // A plain-text separator: an escaped "\n" has to survive Swift, AppleScript and
+            // ExtendScript quoting, and doesn't.
+            "f.write(d + '|~|' + (isComp ? a.name : '') + '|~|' + (isComp ? a.time : ''));",
+            "f.close();",
+        ].joined(separator: " ")
         let script = """
         tell application id "\(bundleID)"
-            DoScript "\(js.replacingOccurrences(of: "\"", with: "\\\""))"
+            DoScript "\(js.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))"
         end tell
         """
-        guard let out = runOSAScript(script, timeout: 3) else { return nil }
-        let parts = out.components(separatedBy: "\t")
-        var doc = parts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard runOSAScript(script, timeout: 3) != nil || FileManager.default.fileExists(atPath: out.path),
+              let text = try? String(contentsOf: out, encoding: .utf8) else { return nil }
+
+        let parts = text.components(separatedBy: "|~|")
+        var doc = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
         if doc.lowercased().hasSuffix(".aep") { doc = String(doc.dropLast(4)) }
-        let comp = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let comp = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        let time = parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespaces) : ""
         guard !doc.isEmpty else { return nil }
-        return EditorDetail(document: doc, unit: comp.isEmpty ? nil : comp)
+        return EditorDetail(document: doc,
+                            unit: comp.isEmpty ? nil : comp,
+                            timecode: time.isEmpty ? nil : time)
     }
 
     // MARK: - Helpers
@@ -165,6 +201,23 @@ final class EditorDetailProbe {
     }
 
     private static func pid(of app: EditorApp) -> pid_t? { runningApp(app)?.processIdentifier }
+
+    private static func axString(_ el: AXUIElement, _ attr: String) -> String? {
+        var v: AnyObject?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success else { return nil }
+        return v as? String
+    }
+
+    private static func axChildren(_ el: AXUIElement, _ attr: String) -> [AXUIElement] {
+        var v: AnyObject?
+        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success else { return [] }
+        return (v as? [AXUIElement]) ?? []
+    }
+
+    /// "00:03:56:12" or drop-frame "00:03:56;12".
+    private static func looksLikeTimecode(_ s: String) -> Bool {
+        s.range(of: #"^\d{1,2}:\d{2}:\d{2}[:;]\d{2}$"#, options: .regularExpression) != nil
+    }
 
     /// Runs AppleScript in a child process so a wedged Apple Event can be killed.
     /// `NSAppleScript` runs in-process and offers no way out if the target never answers.

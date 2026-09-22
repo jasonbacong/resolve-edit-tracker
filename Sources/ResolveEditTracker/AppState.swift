@@ -54,6 +54,9 @@ final class AppState: ObservableObject {
     private let appSwitchGrace: TimeInterval = 8  // a quick peek at another app doesn't split the session
     private var pendingDoc: String?
     private var pendingDocSince = Date.distantPast
+    private var loggedFront: EditorApp?       // last front app written to the debug log
+    private var adobeTimecode: String?        // Premiere / AE playhead, for playback detection
+    private var adobeTimecodeMovedAt = Date.distantPast
 
     // Playback detection — a moving playhead means the user is reviewing, not idle.
     private var lastTimecode: String?
@@ -365,13 +368,22 @@ final class AppState: ObservableObject {
 
         let idle = IdleMonitor.idleSeconds()
         let front = frontmostEnabledEditor()
+        if front != loggedFront {
+            loggedFront = front
+            Log.write("◧ in front: \(front?.displayName ?? "another app") (state \(state), idle \(Int(idle))s)")
+        }
+        // How long the current front app has held the front — the switch grace is
+        // measured from here, never from when you left the previous app.
+        if front != pendingApp {
+            pendingApp = front
+            pendingAppSince = now
+        }
 
         if state == .tracking && sessionApp != .resolve {
             tickTrackingOther(front: front, now: now, dt: dt, idle: idle)
         } else if let front, front != .resolve {
             tickEnterOther(front, now: now, dt: dt, idle: idle)
         } else {
-            pendingApp = nil
             // Paused in an Adobe app that has since quit — nothing left to resume there.
             if state.isPaused, sessionApp != .resolve, !isRunning(sessionApp) {
                 state = .notInProject
@@ -403,11 +415,15 @@ final class AppState: ObservableObject {
 
         if front == app {
             awaySince = nil
-            pendingApp = nil
             followDocument(in: app, now: now)
             guard state == .tracking, sessionApp == app else { return }   // a document switch restarted us
             accrue(dt: dt, now: now, page: app.rawValue, unit: activeUnit)
-            if settings.idleMinutes > 0, idle >= Double(settings.idleMinutes) * 60 {
+            // As with Resolve: a moving playhead means you're reviewing, not away —
+            // up to the same hard ceiling, so looped playback can't bill forever.
+            // (The playhead is read every few seconds, hence the wider window.)
+            let reviewing = now.timeIntervalSince(adobeTimecodeMovedAt) < 10
+            if settings.idleMinutes > 0, idle >= Double(settings.idleMinutes) * 60,
+               !reviewing || idle >= hardIdleSec {
                 endSession(autoNote: "(auto-stopped: idle)")
                 state = .idlePaused
                 idlePauseReason = .idle
@@ -419,23 +435,24 @@ final class AppState: ObservableObject {
         // Something else is in front — freeze the clock.
         elapsed = current?.durationSec ?? 0
         if awaySince == nil { awaySince = now }
-        let since = awaySince!
-        let away = now.timeIntervalSince(since)
+        let away = now.timeIntervalSince(awaySince!)
+        let held = now.timeIntervalSince(pendingAppSince)
 
-        // Another tracked editor held the front long enough: hand the time over to it.
-        if let front, away >= appSwitchGrace {
+        // Another tracked editor has held the front long enough: hand over to it,
+        // crediting it only the time it has actually been in front.
+        if let front, held >= appSwitchGrace {
             if front == .resolve {
                 if status.hasProject, let project = status.project {
                     endSession(autoNote: "(auto-stopped: switched to Resolve)")
                     enterTracking(project: project, reason: .appSwitch,
-                                  unit: status.timeline, creditSince: since)
+                                  unit: status.timeline, creditSince: pendingAppSince)
                     return
                 }
             } else {
                 let doc = documentName(for: front)
                 endSession(autoNote: "(auto-stopped: switched to \(front.shortName))")
                 enterTracking(project: doc.project, reason: .appSwitch,
-                              app: front, unit: doc.unit, creditSince: since)
+                              app: front, unit: doc.unit, creditSince: pendingAppSince)
                 return
             }
         }
@@ -451,11 +468,6 @@ final class AppState: ObservableObject {
 
     /// An Adobe app is in front and we're not yet tracking it.
     private func tickEnterOther(_ app: EditorApp, now: Date, dt: Double, idle: Double) {
-        if pendingApp != app {
-            pendingApp = app
-            pendingAppSince = now
-        }
-
         switch state {
         case .tracking:
             // Moving from Resolve. Freeze it; hand over once the new app has stuck.
@@ -509,15 +521,27 @@ final class AppState: ObservableObject {
         guard settings.trackDocumentDetail, app.unitLabel != nil,
               let d = detailProbe.detail(for: app), let doc = d.document else { return }
         activeUnit = d.unit
+        if let tc = d.timecode, tc != adobeTimecode {
+            if adobeTimecode != nil { adobeTimecodeMovedAt = now }
+            adobeTimecode = tc
+        }
 
         if doc == activeProject { pendingDoc = nil; return }
 
-        if activeProject == app.displayName, var s = current {
+        // Placeholder names — the app's own name before it answered, or an unsaved AE
+        // project — get relabelled in place, so the first save doesn't split the session.
+        let placeholder = activeProject == app.displayName || activeProject == "Untitled Project"
+        if placeholder, var s = current {
             s.project = doc
             s.rate = settings.rate(for: doc)
+            // Time recorded before the name arrived belongs to the first sequence we see.
+            if s.timelineSeconds.isEmpty, let unit = d.unit, s.durationSec > 0 {
+                s.timelineSeconds[unit] = s.durationSec
+            }
             current = s
             activeProject = doc
             announcedProject = doc
+            Log.write("✎ \(app.shortName) session is \(doc)\(d.unit.map { " · \($0)" } ?? "")")
             return
         }
 
@@ -655,6 +679,7 @@ final class AppState: ObservableObject {
         pendingApp = nil
         pendingDoc = nil
         zeroInputSince = nil
+        adobeTimecode = nil
         let now = Date()
         let start = min(creditSince ?? now, now)
         let credited = now.timeIntervalSince(start)
