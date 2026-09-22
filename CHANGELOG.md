@@ -2,6 +2,13 @@
 
 ## v1.2.0
 
+- **Renamed to Editor Tracker** (was Resolve Edit Tracker), now that it covers more than
+  Resolve. The app is `Editor Tracker.app`, the process `EditorTracker` (so the pause
+  shortcut is now `killall -USR1 EditorTracker`), and data lives in
+  `~/Library/Application Support/EditorTracker/` — your existing folder is moved there
+  automatically on first launch. The bundle ID is unchanged, and launch-at-login is
+  re-pointed at the renamed app.
+
 - **Premiere Pro, After Effects, Photoshop, Lightroom and Lightroom Classic** are tracked
   alongside Resolve. Whichever supported app is in front gets the time, and the menu-bar
   icon switches to that app's own icon. Switches must hold for 8 seconds before the

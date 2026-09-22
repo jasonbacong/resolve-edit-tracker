@@ -5,7 +5,7 @@ import AppKit
 // item and its popover are built by hand in AppDelegate.
 
 @main
-enum ResolveEditTrackerMain {
+enum EditorTrackerMain {
     static func main() {
         MainActor.assumeIsolated {
             let app = NSApplication.shared

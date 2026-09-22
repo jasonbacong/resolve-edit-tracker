@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "ResolveEditTracker",
+    name: "EditorTracker",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "ResolveEditTracker",
-            path: "Sources/ResolveEditTracker",
+            name: "EditorTracker",
+            path: "Sources/EditorTracker",
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]

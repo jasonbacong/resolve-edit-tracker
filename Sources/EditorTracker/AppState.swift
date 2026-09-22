@@ -123,6 +123,7 @@ final class AppState: ObservableObject {
         recoverCrashedSession()
         rebuildStats(force: true)
 
+        LoginItem.reconcile(wanted: settings.launchAtLogin)
         settings.launchAtLogin = LoginItem.isEnabled
         // Ad-hoc signed updates can lose Accessibility access; ask again rather than
         // silently recording Premiere without its project and sequence names.
@@ -888,9 +889,9 @@ final class AppState: ObservableObject {
         switch state {
         case .tracking, .idlePaused, .manuallyPaused:
             if sessionApp != .resolve { return activeProject ?? sessionApp.displayName }
-            return status.project ?? activeProject ?? "Resolve Edit Tracker"
+            return status.project ?? activeProject ?? "Editor Tracker"
         case .notInProject:
-            return status.project ?? stats.project ?? "Resolve Edit Tracker"
+            return status.project ?? stats.project ?? "Editor Tracker"
         }
     }
 

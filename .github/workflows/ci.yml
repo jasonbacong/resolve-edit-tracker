@@ -26,6 +26,6 @@ jobs:
 
       - name: Sanity-check the bundle
         run: |
-          test -x "dist/Resolve Edit Tracker.app/Contents/MacOS/ResolveEditTracker"
-          /usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "dist/Resolve Edit Tracker.app/Contents/Info.plist"
-          codesign --verify --verbose "dist/Resolve Edit Tracker.app"
+          test -x "dist/Editor Tracker.app/Contents/MacOS/EditorTracker"
+          /usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "dist/Editor Tracker.app/Contents/Info.plist"
+          codesign --verify --verbose "dist/Editor Tracker.app"

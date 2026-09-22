@@ -1,4 +1,4 @@
-# Resolve Edit Tracker
+# Editor Tracker
 
 A native macOS menu-bar app that automatically tracks how long you spend editing in
 **DaVinci Resolve** — which page and timeline the time went to, and what you've earned.
@@ -70,13 +70,13 @@ launches at login, detects when you enter a project, and tracks in the backgroun
 
 ## Install
 
-1. Download `ResolveEditTracker-<version>.zip` from the
+1. Download `EditorTracker-<version>.zip` from the
    [latest release](https://github.com/jasonbacong/resolve-edit-tracker/releases/latest).
-2. Unzip and move **Resolve Edit Tracker.app** to `/Applications`.
+2. Unzip and move **Editor Tracker.app** to `/Applications`.
 3. The app is **not notarized**, so macOS will block the first launch. Either right-click
    the app → **Open**, or run:
    ```bash
-   xattr -dr com.apple.quarantine "/Applications/Resolve Edit Tracker.app"
+   xattr -dr com.apple.quarantine "/Applications/Editor Tracker.app"
    ```
 4. Open it, then **Settings → Launch at login**.
 
@@ -88,7 +88,7 @@ There's no Dock icon — look for the timer icon in the menu bar.
 git clone https://github.com/jasonbacong/resolve-edit-tracker.git
 cd resolve-edit-tracker
 ./make_app.sh
-cp -R "dist/Resolve Edit Tracker.app" /Applications/
+cp -R "dist/Editor Tracker.app" /Applications/
 ```
 
 Needs Xcode 16+ (Swift 6 toolchain). See [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -96,18 +96,24 @@ Needs Xcode 16+ (Swift 6 toolchain). See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## How it works
 
 A small Python probe (embedded in the app, written to a temp file at launch) connects to
-Resolve's scripting API and prints the current page, project, timeline and render state
-every ~2 s (page, project, timeline, playhead timecode, render state). The Swift app
-reads that stream, runs the start/stop/idle state machine, attributes each second to the
-current page and timeline, and persists sessions. A watchdog restarts the probe if it
-hangs or dies. Idle time comes from Quartz Event Services and the active app from
-`NSWorkspace` — **no Accessibility or Input-Monitoring permission required**.
-Notifications use a custom panel, not Notification Center, so there's no permission
-prompt for that either.
+Resolve's scripting API and prints the page, project, timeline, playhead timecode and
+render state every ~2 s. The Swift app reads that stream, runs the start/stop/idle state
+machine, attributes each second to the current page and timeline, and persists sessions.
+A watchdog restarts the probe if it hangs or dies.
+
+The Adobe apps have no equivalent API, so they're tracked by which app is in front
+(`NSWorkspace`). With name tracking on, Premiere's project and active sequence are read
+from its window through the Accessibility API, and After Effects' project and active
+composition through its `DoScript` Apple Event — both off the main thread, every few
+seconds, only for the app in front.
+
+Idle time comes from Quartz Event Services — **Resolve tracking needs no Accessibility or
+Input-Monitoring permission**; only Premiere's names do. Notifications use a custom
+panel, not Notification Center, so there's no permission prompt for that either.
 
 ### Where your data lives
 
-`~/Library/Application Support/ResolveEditTracker/`
+`~/Library/Application Support/EditorTracker/`
 
 | File | Purpose |
 |---|---|
@@ -121,13 +127,16 @@ Everything is local. Nothing is sent anywhere.
 ## Source layout
 
 ```
-Sources/ResolveEditTracker/
+Sources/EditorTracker/
   Main.swift            entry point (AppKit, accessory app)
   App.swift             AppDelegate: status item, popover, Settings + History windows
   AppState.swift        state machine, tick loop, derived stats, sleep/wake
   Models.swift          Session / Settings / ResolveStatus / ConnectionState (tolerant decoders)
   ResolveMonitor.swift  runs & parses the probe, watchdog, connection state
   ProbeScript.swift     the probe (multi-path, render-aware), as a string
+  Editors.swift         supported apps, bundle-ID matching, install scan, icons
+  EditorDetail.swift    Premiere / After Effects project + sequence / comp names
+  DataLocation.swift    data folder (and the one-time move from the old name)
   IdleMonitor.swift     system-wide input idle
   SessionStore.swift    sessions.json / current.json
   Formatting.swift      time / money formatting + stats builder

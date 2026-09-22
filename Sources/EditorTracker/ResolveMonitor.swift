@@ -42,7 +42,7 @@ final class ResolveMonitor {
 
     private func scriptURL() -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("resolve_edit_tracker_probe.py")
+            .appendingPathComponent("editor_tracker_probe.py")
         try? probeScriptSource.write(to: url, atomically: true, encoding: .utf8)
         return url
     }

@@ -123,7 +123,7 @@ struct HistoryView: View {
     private func exportCSV() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "resolve-edit-tracker.csv"
+        panel.nameFieldStringValue = "editor-tracker.csv"
         NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK, let url = panel.url {
             try? app.exportCSV().data(using: .utf8)?.write(to: url)

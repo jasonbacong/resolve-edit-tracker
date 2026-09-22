@@ -6,7 +6,7 @@ Thanks for taking a look.
 
 ```bash
 swift build            # debug
-./make_app.sh          # assemble dist/Resolve Edit Tracker.app
+./make_app.sh          # assemble dist/Editor Tracker.app
 ./make_app.sh --zip    # + a distributable zip
 ```
 
@@ -15,7 +15,7 @@ needs **DaVinci Resolve Studio** — external scripting is a Studio-only feature
 
 ## Layout
 
-`Sources/ResolveEditTracker/` — see the table in the README. The engine (state
+`Sources/EditorTracker/` — see the table in the README. The engine (state
 machine, probe, persistence) is AppKit/Foundation; the three windows are SwiftUI.
 
 ## Pull requests

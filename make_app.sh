@@ -1,12 +1,12 @@
 #!/bin/bash
-# Build Resolve Edit Tracker and assemble a double-clickable .app bundle.
-#   ./make_app.sh          -> dist/Resolve Edit Tracker.app
-#   ./make_app.sh --zip    -> also dist/ResolveEditTracker-<version>.zip
+# Build Editor Tracker and assemble a double-clickable .app bundle.
+#   ./make_app.sh          -> dist/Editor Tracker.app
+#   ./make_app.sh --zip    -> also dist/EditorTracker-<version>.zip
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="Resolve Edit Tracker"
-EXECUTABLE="ResolveEditTracker"
+APP_NAME="Editor Tracker"
+EXECUTABLE="EditorTracker"
 BUNDLE_ID="com.jasongrech.resolveedittracker"
 VERSION="${APP_VERSION:-$(cat VERSION 2>/dev/null || echo 1.0.0)}"
 

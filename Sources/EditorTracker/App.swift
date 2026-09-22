@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             .sink { [weak self] in self?.refreshStatusButton() }
             .store(in: &cancellables)
 
-        // `killall -USR1 ResolveEditTracker` toggles pause — bind it to a hotkey app if you like.
+        // `killall -USR1 EditorTracker` toggles pause — bind it to a hotkey app if you like.
         signal(SIGUSR1, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         src.setEventHandler { MainActor.assumeIsolated { state.togglePause() } }
@@ -76,11 +76,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.toolTip = "Tracking \(editor.displayName)"
         } else {
             let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            let image = NSImage(systemSymbolName: appState.menuBarSymbol, accessibilityDescription: "Resolve Edit Tracker")?
+            let image = NSImage(systemSymbolName: appState.menuBarSymbol, accessibilityDescription: "Editor Tracker")?
                 .withSymbolConfiguration(cfg)
             image?.isTemplate = true
             button.image = image
-            button.toolTip = "Resolve Edit Tracker"
+            button.toolTip = "Editor Tracker"
         }
         if let text = appState.menuBarText {
             button.title = " " + text
@@ -126,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if settingsWindow == nil {
             let hosting = NSHostingController(rootView: SettingsView().environmentObject(appState))
             let window = NSWindow(contentViewController: hosting)
-            window.title = "Resolve Edit Tracker Settings"
+            window.title = "Editor Tracker Settings"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if historyWindow == nil {
             let hosting = NSHostingController(rootView: HistoryView().environmentObject(appState))
             let window = NSWindow(contentViewController: hosting)
-            window.title = "Resolve Edit Tracker — History & Reports"
+            window.title = "Editor Tracker — History & Reports"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]

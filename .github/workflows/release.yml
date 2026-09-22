@@ -24,7 +24,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            "dist/ResolveEditTracker-${APP_VERSION}.zip" \
+            "dist/EditorTracker-${APP_VERSION}.zip" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --notes "
@@ -33,6 +33,6 @@ jobs:
           The app is not notarized, so on first launch macOS will block it. Either
           right-click the app → **Open**, or run:
           \`\`\`
-          xattr -dr com.apple.quarantine \"/Applications/Resolve Edit Tracker.app\"
+          xattr -dr com.apple.quarantine \"/Applications/Editor Tracker.app\"
           \`\`\`
           "

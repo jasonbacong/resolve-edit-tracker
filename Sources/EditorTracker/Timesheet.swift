@@ -143,7 +143,7 @@ enum Timesheet {
           \(pageHTML.isEmpty ? "" : "<div><h3>Resolve pages</h3><ul>\(pageHTML)</ul></div>")
           <div><h3>Timelines, sequences &amp; comps</h3><ul>\(unitHTML.isEmpty ? "<li>—</li>" : unitHTML)</ul></div>
         </div>
-        <footer>Generated \(now.string(from: Date())) by Resolve Edit Tracker</footer>
+        <footer>Generated \(now.string(from: Date())) by Editor Tracker</footer>
         </body></html>
         """
     }

@@ -194,7 +194,7 @@ struct MenuContentView: View {
                 AppState.shared?.flushForQuit()
                 NSApp.terminate(nil)
             } label: {
-                Text("Quit Resolve Edit Tracker").frame(maxWidth: .infinity)
+                Text("Quit Editor Tracker").frame(maxWidth: .infinity)
             }
             .controlSize(.regular)
         }

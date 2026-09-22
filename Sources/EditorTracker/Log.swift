@@ -1,6 +1,6 @@
 import Foundation
 
-/// Lightweight append-only log at ~/Library/Application Support/ResolveEditTracker/debug.log
+/// Lightweight append-only log at ~/Library/Application Support/EditorTracker/debug.log
 enum Log {
     private static let url: URL = DataLocation.directory.appendingPathComponent("debug.log")
 
