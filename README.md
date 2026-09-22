@@ -3,6 +3,7 @@
 A native macOS menu-bar app that automatically tracks how long you spend editing in
 **DaVinci Resolve** — which page and timeline the time went to, and what you've earned.
 It starts on its own the moment you open a project, so you never forget to hit "start".
+It also follows you into **Premiere Pro, After Effects, Photoshop and Lightroom**.
 
 [![CI](https://github.com/jasonbacong/resolve-edit-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/jasonbacong/resolve-edit-tracker/actions/workflows/ci.yml)
 &nbsp;·&nbsp; macOS 14+ &nbsp;·&nbsp; DaVinci Resolve **Studio** &nbsp;·&nbsp; MIT
@@ -22,6 +23,14 @@ launches at login, detects when you enter a project, and tracks in the backgroun
 - **Auto-start / auto-stop.** Open a project → a toast slides down with a soft ping and
   tracking begins. Close the project, switch projects, quit Resolve, or put the Mac to
   sleep → the session is saved.
+- **Multi-app.** Switch to Premiere Pro, After Effects, Photoshop, Lightroom or Lightroom
+  Classic and the session follows; the menu-bar icon becomes that app's icon. A switch has
+  to hold for 8 seconds, so glancing at another app doesn't split your session. Each app
+  can be switched off in Settings.
+- **Sequences and compositions** (optional). Premiere Pro sessions record the project and
+  active sequence; After Effects the project and active composition. Photoshop and
+  Lightroom are tracked as time in the app. Timesheets list the sequences under each
+  session and total time by app.
 - **Focus-aware.** By default the timer only runs while Resolve is the active app —
   switch to your browser and it freezes; come back and it resumes. Playback and jog
   (including from a Speed Editor) count as activity. Turn it off to track whenever a
@@ -48,6 +57,14 @@ launches at login, detects when you enter a project, and tracks in the backgroun
 - **DaVinci Resolve Studio.** External scripting is a Studio-only feature; the free
   edition can't be tracked this way. Tested with Resolve 21.
 - macOS 14 or later.
+- Adobe apps need nothing extra for time tracking. For project/sequence names
+  (Settings → Apps → *Record project, sequence and composition names*):
+  - **Premiere Pro** has no scripting API that can report its project or sequence, so
+    they're read from its window — grant **Accessibility** access in System Settings →
+    Privacy & Security. Because release builds are ad-hoc signed, macOS may ask for this
+    again after an update.
+  - **After Effects** — macOS asks once to let the tracker talk to it.
+  - Tested with Premiere Pro 2026 and After Effects 2026.
 - `/usr/bin/python3` — present as soon as Xcode or the Command Line Tools are installed.
   It's only used to talk to Resolve's scripting API; no Python packages are needed.
 

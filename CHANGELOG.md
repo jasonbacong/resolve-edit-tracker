@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.2.0
+
+- **Premiere Pro, After Effects, Photoshop, Lightroom and Lightroom Classic** are tracked
+  alongside Resolve. Whichever supported app is in front gets the time, and the menu-bar
+  icon switches to that app's own icon. Switches must hold for 8 seconds before the
+  session moves (the seconds are credited to the new app), so a quick look at another
+  app doesn't split anything. Each app can be turned off in Settings → Apps.
+- **Sequence and composition names** (opt-in). Premiere: project + active sequence,
+  read from its window (needs Accessibility — Premiere's AppleScript can't report
+  either). After Effects: project + active composition. Photoshop and Lightroom are
+  app-level only by design. Playback in Premiere / After Effects defers idle-stop, as it
+  does in Resolve. Saving an unsaved project relabels the session rather than splitting it.
+- **History**: App column; choose the app when adding or editing an entry.
+- **Timesheet**: App column, the timelines / sequences / comps worked on under each
+  session, and a By-app summary with earnings.
+- **Menu**: app icon in the header; Premiere / After Effects projects break down by
+  sequence / comp; a per-app "today" row appears once you've used more than one app.
+- Fix: a session frozen while you were away (or asleep) no longer has its end time
+  stretched to when it was saved — timesheet spans match tracked time and adjacent
+  sessions don't overlap.
+- Fix: editing a session's note or project no longer rounds its duration to whole
+  minutes or wipes its page / timeline breakdown.
+- Existing history loads unchanged — every earlier session is recorded as Resolve.
+
 ## v1.1.0
 
 - **Focus-aware tracking** (new, on by default — Settings → Tracking). The timer only

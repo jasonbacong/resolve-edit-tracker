@@ -705,7 +705,9 @@ final class AppState: ObservableObject {
 
     private func endSession(autoNote: String) {
         guard var session = current else { return }
-        session.end = Date()
+        // `end` already holds the last second actually tracked. Stamping "now" here
+        // would stretch a session over the time it sat frozen (away, asleep) before
+        // being saved, and make back-to-back sessions overlap on the timesheet.
         session.durationSec = session.pageSeconds.values.reduce(0, +)
         let user = noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         session.note = [user, autoNote].filter { !$0.isEmpty }.joined(separator: " ")
